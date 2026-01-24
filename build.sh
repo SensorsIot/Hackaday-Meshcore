@@ -13,6 +13,7 @@ Commands:
   build-companion-firmwares: Build all companion firmwares for all build targets.
   build-repeater-firmwares: Build all repeater firmwares for all build targets.
   build-room-server-firmwares: Build all chat room server firmwares for all build targets.
+  build-bridge-firmwares: Build all bridge firmwares (TCP, ESPNow, RS232) for all build targets.
 
 Examples:
 Build firmware for the "RAK_4631_repeater" device target
@@ -29,6 +30,9 @@ $ sh build.sh build-repeater-firmwares
 
 Build all chat room server firmwares
 $ sh build.sh build-room-server-firmwares
+
+Build all bridge firmwares
+$ sh build.sh build-bridge-firmwares
 EOF
 }
 
@@ -183,10 +187,20 @@ build_room_server_firmwares() {
 
 }
 
+build_bridge_firmwares() {
+
+  # build all bridge firmwares (TCP, ESPNow, RS232)
+  build_all_firmwares_by_suffix "_bridge_tcp"
+  build_all_firmwares_by_suffix "_bridge_espnow"
+  build_all_firmwares_by_suffix "_bridge_rs232"
+
+}
+
 build_firmwares() {
   build_companion_firmwares
   build_repeater_firmwares
   build_room_server_firmwares
+  build_bridge_firmwares
 }
 
 # clean build dir
@@ -219,4 +233,6 @@ elif [[ $1 == "build-repeater-firmwares" ]]; then
   build_repeater_firmwares
 elif [[ $1 == "build-room-server-firmwares" ]]; then
   build_room_server_firmwares
+elif [[ $1 == "build-bridge-firmwares" ]]; then
+  build_bridge_firmwares
 fi

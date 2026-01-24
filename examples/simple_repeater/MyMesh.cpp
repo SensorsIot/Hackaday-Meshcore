@@ -664,8 +664,9 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
       discover_limiter(4, 120)  // max 4 every 2 minutes
 #if defined(WITH_RS232_BRIDGE)
       , bridge(&_prefs, WITH_RS232_BRIDGE, _mgr, &rtc)
-#endif
-#if defined(WITH_ESPNOW_BRIDGE)
+#elif defined(WITH_ESPNOW_BRIDGE)
+      , bridge(&_prefs, _mgr, &rtc)
+#elif defined(WITH_TCP_WIFI_BRIDGE)
       , bridge(&_prefs, _mgr, &rtc)
 #endif
 {
@@ -1061,6 +1062,10 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
     } else {
       strcpy(reply, "Err - ??");
     }
+#if defined(WITH_TCP_WIFI_BRIDGE)
+  } else if (strncmp(command, "tcp ", 4) == 0) {
+    bridge.handleCommand(command + 4, reply);
+#endif
   } else{
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
   }

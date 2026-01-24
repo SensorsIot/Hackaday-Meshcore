@@ -1,4 +1,4 @@
-name: Build Bridge Firmwares
+name: Build Linked Repeater Firmwares
 
 permissions:
   contents: write
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
   push:
     tags:
-      - 'bridge-*'
+      - 'linked-repeater-*'
 
 jobs:
 
@@ -24,19 +24,19 @@ jobs:
       - name: Build Firmwares
         env:
           FIRMWARE_VERSION: ${{ env.GIT_TAG_VERSION }}
-        run: /usr/bin/env bash build.sh build-bridge-firmwares
+        run: /usr/bin/env bash build.sh build-linked-repeater-firmwares
 
       - name: Upload Workflow Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: bridge-firmwares
+          name: linked-repeater-firmwares
           path: out
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          name: Bridge Firmware ${{ env.GIT_TAG_VERSION }}
+          name: Linked Repeater Firmware ${{ env.GIT_TAG_VERSION }}
           body: ""
           draft: true
           files: out/*

@@ -1,0 +1,233 @@
+# Linked Repeater for MeshCore
+
+## Overview
+
+Linked Repeaters enable two or more MeshCore repeaters to relay packets between each other, linking geographically separate LoRa mesh networks. This creates a unified mesh that spans multiple locations connected via WiFi, internet, or serial links.
+
+## Link Types
+
+| Type | Connection | Use Case |
+|------|------------|----------|
+| **TCP WiFi** | WiFi/Internet | Link over LAN or internet |
+| **ESP-NOW** | Direct WiFi | Short-range WiFi without router |
+| **RS232** | Serial cable | Wired point-to-point connection |
+
+## Use Cases
+
+- **Link distant meshes**: Connect LoRa networks separated by distance using internet backhaul
+- **Building penetration**: Bridge outdoor LoRa network to indoor WiFi-connected repeater
+- **Cross-band linking**: Connect meshes operating on different frequencies
+- **Redundant paths**: Provide backup connectivity when LoRa path is degraded
+- **Site interconnection**: Link multiple buildings or locations into one mesh
+
+## Requirements
+
+### TCP WiFi Bridge
+- ESP32-based repeater (Heltec V3, LilyGo T3S3, T-Beam, etc.)
+- WiFi network access (configured via captive portal)
+- Two repeaters: one as server, one as client
+- Network connectivity between repeaters (same LAN or routable IPs)
+
+### ESP-NOW Bridge
+- ESP32-based repeater
+- Two repeaters within WiFi range (~200m line of sight)
+- No router or internet required
+
+### RS232 Bridge
+- Any supported platform (ESP32, nRF52, RP2040, STM32)
+- Serial cable between devices
+- Matching baud rate configuration
+
+## Architecture
+
+```
+Site A                                      Site B
+┌─────────────────┐                        ┌─────────────────┐
+│   LoRa Radio    │                        │   LoRa Radio    │
+│       ↓↑        │                        │       ↓↑        │
+│    MyMesh       │                        │    MyMesh       │
+│       ↓↑        │                        │       ↓↑        │
+│  Linked Repeater│◄───── Link ──────────►│  Linked Repeater│
+│   (Server)      │  (TCP/ESPNow/RS232)    │   (Client)      │
+└─────────────────┘                        └─────────────────┘
+        │                                          │
+        ▼                                          ▼
+   [Local Mesh]                               [Local Mesh]
+```
+
+## Available Build Targets
+
+### Heltec V3
+- `Heltec_v3_repeater_bridge_tcp`
+- `Heltec_v3_repeater_bridge_espnow`
+- `Heltec_v3_repeater_bridge_rs232`
+
+### LilyGo T3S3
+- `LilyGo_T3S3_sx1262_repeater_bridge_tcp`
+- `LilyGo_T3S3_sx1262_repeater_bridge_espnow`
+
+### LilyGo T-Beam
+- `Tbeam_SX1262_repeater_bridge_tcp`
+- `Tbeam_SX1262_repeater_bridge_espnow`
+- `Tbeam_SX1276_repeater_bridge_tcp`
+- `Tbeam_SX1276_repeater_bridge_espnow`
+
+### LilyGo T-Beam Supreme
+- `T_Beam_S3_Supreme_SX1262_repeater_bridge_tcp`
+- `T_Beam_S3_Supreme_SX1262_repeater_bridge_espnow`
+
+### LilyGo T-Deck
+- `LilyGo_TDeck_repeater_bridge_tcp`
+
+### LilyGo T-LoRa v2.1
+- `LilyGo_TLora_V2_1_1_6_repeater_bridge_tcp`
+- `LilyGo_TLora_V2_1_1_6_repeater_bridge_espnow`
+- `LilyGo_TLora_V2_1_1_6_repeater_bridge_rs232`
+
+## TCP WiFi Bridge Setup
+
+### Captive Portal Configuration
+
+1. Flash firmware with TCP bridge target (e.g., `Heltec_v3_repeater_bridge_tcp`)
+2. Device starts AP: **"MeshCore-TCP-Setup"**
+3. Connect to AP from phone/laptop
+4. Browser opens config page (or navigate to 192.168.4.1)
+5. Enter WiFi credentials and TCP bridge settings:
+   - WiFi SSID and password
+   - Mode: Server or Client
+   - TCP Port (default: 5555)
+   - Remote Host (client mode only)
+6. Device saves config and reboots
+
+### CLI Commands
+
+| Command | Description | Default |
+|---------|-------------|---------|
+| `tcp mode 0` | Set as server (listens for connections) | 0 |
+| `tcp mode 1` | Set as client (connects to remote) | - |
+| `tcp port 5555` | Set TCP port | 5555 |
+| `tcp host 192.168.1.100` | Set remote host (client mode) | - |
+| `tcp status` | Show connection status | - |
+| `tcp save` | Save configuration | - |
+| `tcp wifi reset` | Clear WiFi config, restart portal | - |
+
+### Example: Link Two Sites
+
+**Site A (Server):**
+```
+tcp mode 0
+tcp port 5555
+tcp save
+```
+
+**Site B (Client):**
+```
+tcp mode 1
+tcp host 192.168.1.100
+tcp port 5555
+tcp save
+```
+
+## ESP-NOW Bridge Setup
+
+ESP-NOW provides direct WiFi linking without a router.
+
+### CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `bridge on` | Enable bridge |
+| `bridge off` | Disable bridge |
+| `bridge channel 1` | Set WiFi channel (1-14) |
+| `bridge secret MYKEY` | Set encryption key |
+
+Both devices must use the same channel and secret.
+
+## RS232 Bridge Setup
+
+### CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `bridge on` | Enable bridge |
+| `bridge off` | Disable bridge |
+| `bridge baud 115200` | Set baud rate |
+
+### Wiring
+
+Connect TX of one device to RX of the other, and vice versa. Ground must be common.
+
+## Common Bridge Settings
+
+All bridge types share these settings:
+
+| Command | Description | Default |
+|---------|-------------|---------|
+| `bridge on` | Enable bridge | on |
+| `bridge off` | Disable bridge | - |
+| `bridge delay 500` | Packet processing delay (ms) | 500 |
+| `bridge src 0` | Packet source: 0=TX, 1=RX | 0 |
+
+## Transparent Operation
+
+For mesh users to see linked repeaters as a single logical node:
+
+1. **Same node name** - Configure both repeaters with identical `node_name`
+2. **Bridge filters duplicates** - Prevents packet loops
+3. **Seamless routing** - Messages route to whichever side receives them first
+
+## Technical Details
+
+### Protocol
+
+All bridge types use the same framing:
+- Magic header: `0xC03E` (2 bytes)
+- Length: big-endian (2 bytes)
+- Payload: mesh packet (variable)
+- Checksum: Fletcher-16 (2 bytes)
+
+### Duplicate Prevention
+
+The bridge uses `SimpleMeshTables` to track seen packets, preventing:
+- Packets from looping back through the bridge
+- Duplicate transmissions of the same packet
+
+## Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| Captive portal not showing | Connect to "MeshCore-TCP-Setup" AP, navigate to 192.168.4.1 |
+| WiFi not connecting | Run `tcp wifi reset` to clear config and restart portal |
+| Client can't connect | Check server IP, port, firewall rules |
+| Packets not flowing | Verify `bridge on`, check `tcp status` or `bridge status` |
+| Frequent disconnects | Check WiFi signal strength |
+| ESP-NOW not linking | Verify same channel and secret on both devices |
+| RS232 not working | Check TX/RX wiring, verify matching baud rate |
+
+## Building Firmware
+
+### Manual Build
+
+```bash
+# Build all linked repeater firmwares
+FIRMWARE_VERSION=v1.0.0 sh build.sh build-linked-repeater-firmwares
+
+# Build specific target
+FIRMWARE_VERSION=v1.0.0 pio run -e Heltec_v3_repeater_bridge_tcp
+```
+
+### GitHub Actions
+
+Push a tag to trigger automated builds:
+```bash
+git tag linked-repeater-v1.0.0
+git push --tags
+```
+
+Or trigger manually from Actions → "Build Linked Repeater Firmwares" → Run workflow.
+
+## Limitations
+
+- **TCP WiFi**: ESP32 only, single connection, no built-in encryption (use VPN)
+- **ESP-NOW**: ESP32 only, limited range (~200m), requires same WiFi channel
+- **RS232**: Requires physical cable, limited by cable length

@@ -333,20 +333,7 @@ Linked repeaters automatically sync their RTC from companion nodes (devices conn
 - All timestamps are **UTC** (Unix epoch)
 - Provides consistent time reference across the mesh
 - No timezone configuration needed
-
-### Implementation
-
-```cpp
-// MyMesh.cpp - Linked Repeater: Time sync from companion nodes
-void MyMesh::syncTimeFromCompanion(uint32_t timestamp) {
-  if (timestamp < 1700000000) return;  // Invalid (before Nov 2023)
-  uint32_t current = getRTCClock()->getCurrentTime();
-  int32_t diff = (int32_t)(timestamp - current);
-  if (diff > 60 || diff < -60) {
-    getRTCClock()->setCurrentTime(timestamp);
-  }
-}
-```
+- Encapsulated in `MyMesh::syncTimeFromCompanion()`
 
 ## Limitations
 

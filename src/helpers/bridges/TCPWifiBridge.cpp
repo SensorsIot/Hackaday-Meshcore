@@ -497,15 +497,15 @@ void TCPWifiBridge::sendPacket(mesh::Packet* packet) {
 void TCPWifiBridge::logPacket(const char* direction, mesh::Packet* packet, uint16_t len, uint16_t crc) {
   uint8_t type = packet->getPayloadType();
 
-  // For message packets (type 4), try to extract src/dest names
-  if (_mesh && type == 4 && packet->payload_len >= 2) {
+  // For message packets (type 4), show src/dest (names if available, else hashes)
+  if (type == 4 && packet->payload_len >= 2) {
     uint8_t dest_hash = packet->payload[0];
     uint8_t src_hash = packet->payload[1];
 
-    const char* src_name = _mesh->lookupNameByHash(src_hash);
-    const char* dest_name = _mesh->lookupNameByHash(dest_hash);
-
     char src_str[20], dest_str[20];
+    const char* src_name = _mesh ? _mesh->lookupNameByHash(src_hash) : nullptr;
+    const char* dest_name = _mesh ? _mesh->lookupNameByHash(dest_hash) : nullptr;
+
     if (src_name) {
       snprintf(src_str, sizeof(src_str), "%s", src_name);
     } else {

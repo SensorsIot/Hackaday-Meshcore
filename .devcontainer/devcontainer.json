@@ -1,0 +1,52 @@
+{
+  "name": "meshcore",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.11"
+    },
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/sshd:1": {
+      "port": 2533
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "platformio.platformio-ide",
+        "ms-vscode.cpptools",
+        "ms-vscode.cpptools-extension-pack"
+      ]
+    }
+  },
+  "remoteUser": "dev",
+  "containerEnv": {
+    "PLATFORMIO_CORE_DIR": "/home/dev/.platformio",
+    "INFLUXDB_TOKEN": "${localEnv:INFLUXDB_TOKEN}",
+    "INFLUXDB_URL": "${localEnv:INFLUXDB_URL}",
+    "INFLUXDB_ORG": "${localEnv:INFLUXDB_ORG}",
+    "HA_TOKEN": "${localEnv:HA_TOKEN}",
+    "HA_TOKEN_NODERED": "${localEnv:HA_TOKEN_NODERED}",
+    "HA_URL": "${localEnv:HA_URL}",
+    "GRAFANA_URL": "${localEnv:GRAFANA_URL}",
+    "GRAFANA_USER": "${localEnv:GRAFANA_USER}",
+    "GRAFANA_PASSWORD": "${localEnv:GRAFANA_PASSWORD}",
+    "TELEGRAM_BOT_TOKEN": "${localEnv:TELEGRAM_BOT_TOKEN}"
+  },
+  "mounts": [
+    "source=${localEnv:HOME}/.ssh,target=/tmp/host-ssh,type=bind,readonly",
+    "source=${localEnv:HOME}/.git-credentials,target=/home/dev/.git-credentials,type=bind,readonly",
+    "source=${localWorkspaceFolder}/.claude-data,target=/home/dev/.claude-data,type=bind"
+  ],
+  "runArgs": [
+    "--privileged",
+    "--device-cgroup-rule=c 166:* rwm",
+    "--device=/dev/bus/usb:/dev/bus/usb",
+    "-v", "/dev:/dev",
+    "-p", "2533:2222"
+  ],
+  "postCreateCommand": "mkdir -p ~/.ssh && cp /tmp/host-ssh/authorized_keys ~/.ssh/ && cp /tmp/host-ssh/id_ed25519 ~/.ssh/ 2>/dev/null || true && chmod 700 ~/.ssh && chmod 600 ~/.ssh/* && git config --global credential.helper store && git config --global core.sshCommand 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' && git clone git@github.com:SensorsIot/claude.git ~/.claude 2>/dev/null || (cd ~/.claude && git pull) && mkdir -p ~/.claude-data/projects && ln -sf ~/.claude-data/.credentials.json ~/.claude/.credentials.json && ln -sf ~/.claude-data/history.jsonl ~/.claude/history.jsonl && rm -rf ~/.claude/projects && ln -sf ~/.claude-data/projects ~/.claude/projects && ln -sf ~/.claude-data/.claude.json ~/.claude.json"
+}

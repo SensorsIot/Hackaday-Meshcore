@@ -114,6 +114,18 @@ protected:
   virtual int  getBlobByKey(const uint8_t key[], int key_len, uint8_t dest_buf[]) { return 0; }  // not implemented
   virtual bool putBlobByKey(const uint8_t key[], int key_len, const uint8_t src_buf[], int len) { return false; }
 
+public:
+  // Name lookup by hash (for bridge logging)
+  const char* lookupNameByHash(uint8_t hash) const {
+    for (int i = 0; i < num_contacts; i++) {
+      if (contacts[i].id.isHashMatch(&hash)) {
+        return contacts[i].name;
+      }
+    }
+    return nullptr;
+  }
+
+protected:
   // Mesh overrides
   void onAdvertRecv(mesh::Packet* packet, const mesh::Identity& id, uint32_t timestamp, const uint8_t* app_data, size_t app_data_len) override;
   int searchPeersByHash(const uint8_t* hash) override;

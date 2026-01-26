@@ -8,6 +8,9 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 
+// Forward declaration for name lookup
+class BaseChatMesh;
+
 /**
  * TCPBridgeConfig - Self-contained configuration for TCP WiFi Bridge.
  *
@@ -76,6 +79,9 @@ public:
   TCPBridgeConfig& getConfig() { return _config; }
   bool isInPortalMode() const { return _in_portal_mode; }
 
+  // Set mesh for name lookup in logs
+  void setMesh(BaseChatMesh* mesh) { _mesh = mesh; }
+
 private:
   // TCP overhead: magic(2) + len(2) + checksum(2) = 6 bytes
   static constexpr uint16_t TCP_OVERHEAD = BRIDGE_MAGIC_SIZE + BRIDGE_LENGTH_SIZE + BRIDGE_CHECKSUM_SIZE;
@@ -96,6 +102,7 @@ private:
   TCPBridgeConfig _config;
   TCPWifiPortal _portal;
   bool _in_portal_mode;
+  BaseChatMesh* _mesh;  // For name lookup in logs
 
   // Networking - TCP
   WiFiServer* _server;
@@ -136,6 +143,9 @@ private:
   // CLI command handlers
   void cmdStatus(char* reply);
   void cmdWifiReset(char* reply);
+
+  // Logging helper
+  void logPacket(const char* direction, mesh::Packet* packet, uint16_t len, uint16_t crc);
 };
 
 #endif  // WITH_TCP_WIFI_BRIDGE

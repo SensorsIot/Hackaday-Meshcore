@@ -1,6 +1,7 @@
 #ifdef WITH_TCP_WIFI_BRIDGE
 
 #include "TCPWifiBridge.h"
+#include "../BaseChatMesh.h"
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <AsyncElegantOTA.h>
@@ -30,6 +31,7 @@ TCPWifiBridge::TCPWifiBridge(NodePrefs* prefs, mesh::PacketManager* mgr, mesh::R
     : BridgeBase(prefs, mgr, rtc),
       _portal(&_config),
       _in_portal_mode(false),
+      _mesh(nullptr),
       _server(nullptr),
       _rx_buffer_pos(0),
       _wifi_connected(false),
@@ -432,10 +434,10 @@ void TCPWifiBridge::processIncomingData() {
 
           // Validate checksum against payload
           if (validateChecksum(_rx_buffer + 4, len, received_checksum)) {
-            BRIDGE_DEBUG_PRINTLN("RX, len=%d crc=0x%04x\n", len, received_checksum);
             mesh::Packet* pkt = _mgr->allocNew();
             if (pkt) {
               if (pkt->readFrom(_rx_buffer + 4, len)) {
+                logPacket("RX<-", pkt, len, received_checksum);
                 onPacketReceived(pkt);
               } else {
                 BRIDGE_DEBUG_PRINTLN("RX failed to parse packet\n");
@@ -484,7 +486,41 @@ void TCPWifiBridge::sendPacket(mesh::Packet* packet) {
     // Transmit complete framed packet
     _client.write(buffer, len + TCP_OVERHEAD);
 
-    BRIDGE_DEBUG_PRINTLN("TX, len=%d crc=0x%04x\n", len, checksum);
+    logPacket("TX->", packet, len, checksum);
+  }
+}
+
+// ============================================================================
+// Logging Helper
+// ============================================================================
+
+void TCPWifiBridge::logPacket(const char* direction, mesh::Packet* packet, uint16_t len, uint16_t crc) {
+  uint8_t type = packet->getPayloadType();
+
+  // For message packets (type 4), try to extract src/dest names
+  if (_mesh && type == 4 && packet->payload_len >= 2) {
+    uint8_t dest_hash = packet->payload[0];
+    uint8_t src_hash = packet->payload[1];
+
+    const char* src_name = _mesh->lookupNameByHash(src_hash);
+    const char* dest_name = _mesh->lookupNameByHash(dest_hash);
+
+    char src_str[20], dest_str[20];
+    if (src_name) {
+      snprintf(src_str, sizeof(src_str), "%s", src_name);
+    } else {
+      snprintf(src_str, sizeof(src_str), "%02X", src_hash);
+    }
+    if (dest_name) {
+      snprintf(dest_str, sizeof(dest_str), "%s", dest_name);
+    } else {
+      snprintf(dest_str, sizeof(dest_str), "%02X", dest_hash);
+    }
+
+    BRIDGE_DEBUG_PRINTLN("%s type=%d len=%d [%s -> %s]\n", direction, type, len, src_str, dest_str);
+  } else {
+    // For non-message packets, just show type and length
+    BRIDGE_DEBUG_PRINTLN("%s type=%d len=%d crc=0x%04x\n", direction, type, len, crc);
   }
 }
 

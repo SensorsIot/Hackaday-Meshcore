@@ -490,15 +490,38 @@ static bool isShare(const mesh::Packet *packet) {
   return false;
 }
 
+// ============================================================================
+// Linked Repeater: Time sync from companion nodes
+// ============================================================================
+void MyMesh::syncTimeFromCompanion(uint32_t timestamp) {
+  if (timestamp < 1700000000) return;  // Invalid timestamp (before Nov 2023)
+
+  uint32_t current = getRTCClock()->getCurrentTime();
+  int32_t diff = (int32_t)(timestamp - current);
+
+  // Sync if our clock is off by more than 60 seconds
+  if (diff > 60 || diff < -60) {
+    getRTCClock()->setCurrentTime(timestamp);
+    MESH_DEBUG_PRINTLN("Time synced from companion: %lu (was off by %ld sec)\n", timestamp, diff);
+  }
+}
+
 void MyMesh::onAdvertRecv(mesh::Packet *packet, const mesh::Identity &id, uint32_t timestamp,
                           const uint8_t *app_data, size_t app_data_len) {
   mesh::Mesh::onAdvertRecv(packet, id, timestamp, app_data, app_data_len); // chain to super impl
 
-  // if this a zero hop advert (and not via 'Share'), add it to neighbours
-  if (packet->path_len == 0 && !isShare(packet)) {
-    AdvertDataParser parser(app_data, app_data_len);
-    if (parser.isValid() && parser.getType() == ADV_TYPE_REPEATER) { // just keep neigbouring Repeaters
-      putNeighbour(id, timestamp, packet->getSNR());
+  AdvertDataParser parser(app_data, app_data_len);
+  if (parser.isValid()) {
+    // Linked Repeater: sync time from companion nodes (have correct time from smartphone)
+    if (parser.getType() == ADV_TYPE_CHAT) {
+      syncTimeFromCompanion(timestamp);
+    }
+
+    // if this a zero hop advert (and not via 'Share'), add it to neighbours
+    if (packet->path_len == 0 && !isShare(packet)) {
+      if (parser.getType() == ADV_TYPE_REPEATER) { // just keep neigbouring Repeaters
+        putNeighbour(id, timestamp, packet->getSNR());
+      }
     }
   }
 }

@@ -317,11 +317,43 @@ This ensures devices always get the same IP after reboot.
 | LilyGo T-LoRa V2.1-1.6 #1 | 90:15:06:CE:10:F4 | 192.168.0.89 | TCP Bridge |
 | LilyGo T-LoRa V2.1-1.6 #2 | 10:06:1C:16:D6:38 | 192.168.0.90 | TCP Bridge |
 
+## Time Synchronization
+
+Linked repeaters automatically sync their RTC from companion nodes (devices connected to smartphones).
+
+### How It Works
+
+1. Companion nodes (ADV_TYPE_CHAT) broadcast advertisements containing their timestamp
+2. Companions get correct time from smartphone apps
+3. Repeaters extract timestamp from received advertisements
+4. If local clock is off by >60 seconds, RTC is updated
+
+### Network Time
+
+- All timestamps are **UTC** (Unix epoch)
+- Provides consistent time reference across the mesh
+- No timezone configuration needed
+
+### Implementation
+
+```cpp
+// MyMesh.cpp - Linked Repeater: Time sync from companion nodes
+void MyMesh::syncTimeFromCompanion(uint32_t timestamp) {
+  if (timestamp < 1700000000) return;  // Invalid (before Nov 2023)
+  uint32_t current = getRTCClock()->getCurrentTime();
+  int32_t diff = (int32_t)(timestamp - current);
+  if (diff > 60 || diff < -60) {
+    getRTCClock()->setCurrentTime(timestamp);
+  }
+}
+```
+
 ## Limitations
 
 - **TCP WiFi**: ESP32 only, single connection, no built-in encryption (use VPN)
 - **ESP-NOW**: ESP32 only, limited range (~200m), requires same WiFi channel
 - **RS232**: Requires physical cable, limited by cable length
+- **Time sync**: Requires companion node in range to sync RTC
 
 ## Fork Changes Summary
 
@@ -351,6 +383,8 @@ This fork adds the following features to the original MeshCore project:
 3. **OTA Updates** - Firmware updates over WiFi (no physical access needed)
 4. **Status Reporting** - Accurate connection state on OLED display
 5. **IP Display** - Shows device IP on OLED when connected
+6. **Bridge Logging** - Enhanced logs with packet type and src/dest hashes
+7. **Time Sync** - RTC sync from companion nodes (UTC network time)
 
 ### Encapsulation
 Changes are well-encapsulated:
@@ -358,3 +392,5 @@ Changes are well-encapsulated:
 - Only interface change is `getStatusString()` in `AbstractBridge.h`
 - UI changes are conditional (`#ifdef ESP_PLATFORM`)
 - Build targets are additive (don't modify existing targets)
+- Time sync in `MyMesh::syncTimeFromCompanion()` with clear comments
+- Bridge logging in `TCPWifiBridge::logPacket()` helper

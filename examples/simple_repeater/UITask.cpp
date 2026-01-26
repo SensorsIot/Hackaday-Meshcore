@@ -79,7 +79,7 @@ void UITask::renderBridgeHomeScreen(char* tmp) {
   // freq,SF,BW,CR (compact single line)
   _display->setCursor(0, 15);
   _display->setColor(DisplayDriver::YELLOW);
-  sprintf(tmp, "%.3f,%d,%.0f,%d", _node_prefs->freq, _node_prefs->sf, _node_prefs->bw, _node_prefs->cr);
+  sprintf(tmp, "%.3f/%d %.1f/%d", _node_prefs->freq, _node_prefs->sf, _node_prefs->bw, _node_prefs->cr);
   _display->print(tmp);
 
   // Bridge status

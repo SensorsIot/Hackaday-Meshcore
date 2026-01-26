@@ -247,7 +247,23 @@ The device will reboot automatically after a successful update.
 
 ## Bridge Status Display
 
-The OLED displays real-time bridge status:
+The OLED displays a compact 4-line layout for linked repeaters:
+
+```
+MyRepeater
+906.875/12 125.0/5
+Bridge: Connected
+192.168.0.89
+```
+
+| Y | Content | Format |
+|---|---------|--------|
+| 0 | Node name | `MyRepeater` |
+| 15 | freq/SF BW/CR | `906.875/12 125.0/5` |
+| 30 | Bridge status | `Bridge: Connected` |
+| 45 | IP address | `192.168.0.89` |
+
+Bridge status values:
 
 | Display | Meaning |
 |---------|---------|
@@ -256,15 +272,18 @@ The OLED displays real-time bridge status:
 | `WiFi Disconn` | WiFi configured but not connected |
 | `Searching...` | WiFi connected, looking for peer |
 | `Connecting...` | Peer discovered, establishing connection |
-| `Connected 192.168.0.89` | Fully connected with IP address |
+| `Connected` | Fully connected to peer |
 
 ## Discovering Device IP Addresses
 
 ### Method 1: OLED Display
 
-The device shows its status and IP address on the OLED screen after WiFi connects:
+The device shows its IP address on the OLED screen (line 4) after WiFi connects:
 ```
-Connected 192.168.0.89
+MyRepeater
+906.875/12 125.0/5
+Bridge: Connected
+192.168.0.89
 ```
 
 ### Method 2: Network Scan for MeshCore Devices

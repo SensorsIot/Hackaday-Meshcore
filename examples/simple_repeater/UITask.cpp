@@ -48,6 +48,55 @@ void UITask::begin(NodePrefs* node_prefs, const char* build_date, const char* fi
   sprintf(_version_info, "%s (%s)", version, build_date);
 }
 
+// Standard repeater display (original layout)
+void UITask::renderStandardHomeScreen(char* tmp) {
+  // node name
+  _display->setCursor(0, 0);
+  _display->setTextSize(1);
+  _display->setColor(DisplayDriver::GREEN);
+  _display->print(_node_prefs->node_name);
+
+  // freq / sf
+  _display->setCursor(0, 20);
+  _display->setColor(DisplayDriver::YELLOW);
+  sprintf(tmp, "FREQ: %06.3f SF%d", _node_prefs->freq, _node_prefs->sf);
+  _display->print(tmp);
+
+  // bw / cr
+  _display->setCursor(0, 30);
+  sprintf(tmp, "BW: %03.2f CR: %d", _node_prefs->bw, _node_prefs->cr);
+  _display->print(tmp);
+}
+
+// Linked repeater display (compact layout with bridge status and IP)
+void UITask::renderBridgeHomeScreen(char* tmp) {
+  // node name
+  _display->setCursor(0, 0);
+  _display->setTextSize(1);
+  _display->setColor(DisplayDriver::GREEN);
+  _display->print(_node_prefs->node_name);
+
+  // freq,SF,BW,CR (compact single line)
+  _display->setCursor(0, 15);
+  _display->setColor(DisplayDriver::YELLOW);
+  sprintf(tmp, "%.3f,%d,%.0f,%d", _node_prefs->freq, _node_prefs->sf, _node_prefs->bw, _node_prefs->cr);
+  _display->print(tmp);
+
+  // Bridge status
+  _display->setCursor(0, 30);
+  _display->setColor(DisplayDriver::LIGHT);
+  sprintf(tmp, "Bridge: %s", g_bridge->getStatusString());
+  _display->print(tmp);
+
+#ifdef ESP_PLATFORM
+  // IP address on separate line when connected
+  if (WiFi.status() == WL_CONNECTED) {
+    _display->setCursor(0, 45);
+    _display->print(WiFi.localIP().toString().c_str());
+  }
+#endif
+}
+
 void UITask::renderCurrScreen() {
   static bool first_render = true;
   if (first_render) {
@@ -74,37 +123,10 @@ void UITask::renderCurrScreen() {
     _display->setCursor((_display->width() - typeWidth) / 2, 35);
     _display->print(node_type);
   } else {  // home screen
-    // node name
-    _display->setCursor(0, 0);
-    _display->setTextSize(1);
-    _display->setColor(DisplayDriver::GREEN);
-    _display->print(_node_prefs->node_name);
-
-    // freq / sf
-    _display->setCursor(0, 20);
-    _display->setColor(DisplayDriver::YELLOW);
-    sprintf(tmp, "FREQ: %06.3f SF%d", _node_prefs->freq, _node_prefs->sf);
-    _display->print(tmp);
-
-    // bw / cr
-    _display->setCursor(0, 30);
-    sprintf(tmp, "BW: %03.2f CR: %d", _node_prefs->bw, _node_prefs->cr);
-    _display->print(tmp);
-
-    // Bridge status
     if (g_bridge) {
-      _display->setCursor(0, 45);
-      _display->setColor(DisplayDriver::LIGHT);
-#ifdef ESP_PLATFORM
-      if (WiFi.status() == WL_CONNECTED) {
-        sprintf(tmp, "%s %s", g_bridge->getStatusString(), WiFi.localIP().toString().c_str());
-      } else {
-        sprintf(tmp, "%s", g_bridge->getStatusString());
-      }
-#else
-      sprintf(tmp, "%s", g_bridge->getStatusString());
-#endif
-      _display->print(tmp);
+      renderBridgeHomeScreen(tmp);
+    } else {
+      renderStandardHomeScreen(tmp);
     }
   }
 }

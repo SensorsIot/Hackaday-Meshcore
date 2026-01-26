@@ -11,6 +11,8 @@ class UITask {
   char _version_info[32];
 
   void renderCurrScreen();
+  void renderStandardHomeScreen(char* tmp);
+  void renderBridgeHomeScreen(char* tmp);
 public:
   UITask(DisplayDriver& display) : _display(&display) { _next_read = _next_refresh = 0; }
   void begin(NodePrefs* node_prefs, const char* build_date, const char* firmware_version);

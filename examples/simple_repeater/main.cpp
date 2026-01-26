@@ -2,6 +2,10 @@
 #include <Mesh.h>
 
 #include "MyMesh.h"
+#include <helpers/bridges/BridgeBase.h>
+
+// Global bridge pointer for UI status display
+AbstractBridge* g_bridge = nullptr;
 
 #ifdef DISPLAY_CLASS
   #include "UITask.h"
@@ -75,6 +79,9 @@ void setup() {
   sensors.begin();
 
   the_mesh.begin(fs);
+
+  // Set global bridge pointer for UI
+  g_bridge = the_mesh.getBridge();
 
 #ifdef DISPLAY_CLASS
   ui_task.begin(the_mesh.getNodePrefs(), FIRMWARE_BUILD_DATE, FIRMWARE_VERSION);

@@ -226,8 +226,116 @@ git push --tags
 
 Or trigger manually from Actions → "Build Linked Repeater Firmwares" → Run workflow.
 
+## OTA Firmware Updates
+
+When connected to WiFi, TCP bridge devices expose an OTA (Over-The-Air) update endpoint. This allows firmware updates without physical access to the device.
+
+### Web Interface
+
+Navigate to `http://<device-ip>/` to see the device info and link to firmware update page.
+
+### OTA Update via curl
+
+```bash
+# Upload firmware to device
+curl -F "MD5=$(md5sum firmware.bin | cut -d' ' -f1)" \
+     -F "firmware=@firmware.bin" \
+     http://192.168.0.89/update
+```
+
+The device will reboot automatically after a successful update.
+
+## Bridge Status Display
+
+The OLED displays real-time bridge status:
+
+| Display | Meaning |
+|---------|---------|
+| `Off` | Bridge not initialized |
+| `Portal Mode` | Captive portal active, awaiting WiFi config |
+| `WiFi Disconn` | WiFi configured but not connected |
+| `Searching...` | WiFi connected, looking for peer |
+| `Connecting...` | Peer discovered, establishing connection |
+| `Connected 192.168.0.89` | Fully connected with IP address |
+
+## Discovering Device IP Addresses
+
+### Method 1: OLED Display
+
+The device shows its status and IP address on the OLED screen after WiFi connects:
+```
+Connected 192.168.0.89
+```
+
+### Method 2: Network Scan for MeshCore Devices
+
+Scan your network and identify MeshCore devices by their web page response:
+
+```bash
+# Scan and show all MeshCore devices with their IPs
+for ip in 192.168.0.{1..254}; do
+  (timeout 0.3 curl -s "http://$ip/" 2>/dev/null | grep -q "MeshCore" && echo "$ip") &
+done 2>/dev/null; wait
+```
+
+Each device responds with its MAC address in the web interface, allowing identification.
+
+### Method 3: DHCP Reservation (Recommended)
+
+For permanent installations, configure static DHCP leases in your router using the known MAC addresses:
+
+| MAC Address | Reserved IP | Device |
+|-------------|-------------|--------|
+| 90:15:06:CE:10:F4 | 192.168.0.89 | Bridge #1 |
+| 10:06:1C:16:D6:38 | 192.168.0.90 | Bridge #2 |
+
+This ensures devices always get the same IP after reboot.
+
+## Test Hardware
+
+| Device | MAC Address | IP (DHCP) | Role |
+|--------|-------------|-----------|------|
+| LilyGo T-LoRa V2.1-1.6 #1 | 90:15:06:CE:10:F4 | 192.168.0.89 | TCP Bridge |
+| LilyGo T-LoRa V2.1-1.6 #2 | 10:06:1C:16:D6:38 | 192.168.0.90 | TCP Bridge |
+
 ## Limitations
 
 - **TCP WiFi**: ESP32 only, single connection, no built-in encryption (use VPN)
 - **ESP-NOW**: ESP32 only, limited range (~200m), requires same WiFi channel
 - **RS232**: Requires physical cable, limited by cable length
+
+## Fork Changes Summary
+
+This fork adds the following features to the original MeshCore project:
+
+### New Files
+| File | Purpose |
+|------|---------|
+| `src/helpers/bridges/TCPWifiBridge.cpp/h` | TCP WiFi bridge implementation |
+| `src/helpers/bridges/TCPWifiPortal.cpp/h` | Captive portal for WiFi configuration |
+| `.github/workflows/build-linked-repeater-firmwares.yml` | CI/CD for bridge builds |
+| `docs/Linked-Repeater.md` | This documentation |
+
+### Modified Files
+| File | Changes |
+|------|---------|
+| `src/helpers/AbstractBridge.h` | Added `getStatusString()` virtual method |
+| `src/helpers/bridges/BridgeBase.h` | Default status string implementation |
+| `examples/simple_repeater/UITask.cpp` | OLED shows bridge status + IP |
+| `examples/simple_repeater/main.cpp` | Bridge initialization |
+| `variants/*/platformio.ini` | Build targets for TCP bridges |
+| `build.sh` | Build script for linked repeater firmwares |
+
+### Features Added
+1. **TCP WiFi Bridge** - Link repeaters over IP networks with auto-discovery
+2. **Captive Portal** - Web-based WiFi and bridge configuration
+3. **OTA Updates** - Firmware updates over WiFi (no physical access needed)
+4. **Status Reporting** - Accurate connection state on OLED display
+5. **IP Display** - Shows device IP on OLED when connected
+
+### Encapsulation
+Changes are well-encapsulated:
+- Bridge logic is isolated in `TCPWifiBridge.*` and `TCPWifiPortal.*`
+- Only interface change is `getStatusString()` in `AbstractBridge.h`
+- UI changes are conditional (`#ifdef ESP_PLATFORM`)
+- Build targets are additive (don't modify existing targets)

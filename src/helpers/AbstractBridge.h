@@ -24,6 +24,13 @@ public:
   virtual bool isRunning() const = 0;
 
   /**
+   * @brief Gets a short status string for display (max 20 chars)
+   *
+   * @return Status string suitable for OLED display
+   */
+  virtual const char* getStatusString() const = 0;
+
+  /**
    * @brief A method to be called on every main loop iteration.
    *        Used for tasks like checking for incoming data.
    */

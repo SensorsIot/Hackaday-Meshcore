@@ -182,6 +182,10 @@ public:
     return &_prefs;
   }
 
+  AbstractBridge* getBridge() {
+    return &bridge;
+  }
+
   void savePrefs() override {
     _cli.savePrefs(_fs);
   }

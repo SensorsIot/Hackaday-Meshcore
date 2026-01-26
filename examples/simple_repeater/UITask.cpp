@@ -1,8 +1,13 @@
 #include "UITask.h"
 #include <Arduino.h>
 #include <helpers/CommonCLI.h>
+#include <helpers/bridges/BridgeBase.h>
+#ifdef ESP_PLATFORM
+#include <WiFi.h>
+#endif
+extern AbstractBridge* g_bridge;
 
-#define AUTO_OFF_MILLIS      20000  // 20 seconds
+#define AUTO_OFF_MILLIS      300000  // 5 minutes
 #define BOOT_SCREEN_MILLIS   4000   // 4 seconds
 
 // 'meshcore', 128x13px
@@ -23,10 +28,13 @@ static const uint8_t meshcore_logo [] PROGMEM = {
 };
 
 void UITask::begin(NodePrefs* node_prefs, const char* build_date, const char* firmware_version) {
+  Serial.println("UITask::begin() starting...");
   _prevBtnState = HIGH;
   _auto_off = millis() + AUTO_OFF_MILLIS;
   _node_prefs = node_prefs;
+  Serial.println("UITask: Calling display->turnOn()");
   _display->turnOn();
+  Serial.printf("UITask: Display isOn=%d\n", _display->isOn());
 
   // strip off dash and commit hash by changing dash to null terminator
   // e.g: v1.2.3-abcdef -> v1.2.3
@@ -41,6 +49,11 @@ void UITask::begin(NodePrefs* node_prefs, const char* build_date, const char* fi
 }
 
 void UITask::renderCurrScreen() {
+  static bool first_render = true;
+  if (first_render) {
+    Serial.println("UITask::renderCurrScreen() first call");
+    first_render = false;
+  }
   char tmp[80];
   if (millis() < BOOT_SCREEN_MILLIS) { // boot screen
     // meshcore logo
@@ -77,6 +90,22 @@ void UITask::renderCurrScreen() {
     _display->setCursor(0, 30);
     sprintf(tmp, "BW: %03.2f CR: %d", _node_prefs->bw, _node_prefs->cr);
     _display->print(tmp);
+
+    // Bridge status
+    if (g_bridge) {
+      _display->setCursor(0, 45);
+      _display->setColor(DisplayDriver::LIGHT);
+#ifdef ESP_PLATFORM
+      if (WiFi.status() == WL_CONNECTED) {
+        sprintf(tmp, "%s %s", g_bridge->getStatusString(), WiFi.localIP().toString().c_str());
+      } else {
+        sprintf(tmp, "%s", g_bridge->getStatusString());
+      }
+#else
+      sprintf(tmp, "%s", g_bridge->getStatusString());
+#endif
+      _display->print(tmp);
+    }
   }
 }
 
@@ -101,13 +130,19 @@ void UITask::loop() {
 
   if (_display->isOn()) {
     if (millis() >= _next_refresh) {
+      static int frame_count = 0;
+      if (frame_count < 3) {
+        Serial.printf("UITask: Rendering frame %d\n", frame_count);
+      }
       _display->startFrame();
       renderCurrScreen();
       _display->endFrame();
+      frame_count++;
 
       _next_refresh = millis() + 1000;   // refresh every second
     }
     if (millis() > _auto_off) {
+      Serial.println("UITask: Auto-off triggered");
       _display->turnOff();
     }
   }

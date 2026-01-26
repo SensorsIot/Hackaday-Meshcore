@@ -42,6 +42,7 @@ For developers;
   - [Simple Repeater](./examples/simple_repeater) - Extends network coverage by relaying messages.
   - [Simple Room Server](./examples/simple_room_server) - A simple BBS server for shared Posts.
   - [Simple Secure Chat](./examples/simple_secure_chat) - Secure terminal based text communication between devices.
+  - [Linked Repeater](./docs/Linked-Repeater.md) - Link geographically separate LoRa meshes via TCP/WiFi, ESP-NOW, or RS232.
 
 The Simple Secure Chat example can be interacted with through the Serial Monitor in Visual Studio Code, or with a Serial USB Terminal on Android.
 

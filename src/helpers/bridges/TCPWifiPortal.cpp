@@ -4,6 +4,7 @@
 #include "TCPWifiBridge.h"
 
 // HTML page stored in PROGMEM to save RAM
+// Simplified: only WiFi credentials needed - peer discovery is automatic
 static const char CONFIG_PAGE[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html>
@@ -15,16 +16,18 @@ static const char CONFIG_PAGE[] PROGMEM = R"rawliteral(
     .container { max-width: 400px; margin: 0 auto; }
     h1 { color: #00d4ff; font-size: 1.5em; text-align: center; }
     h2 { color: #aaa; font-size: 1em; margin-top: 20px; border-bottom: 1px solid #333; padding-bottom: 5px; }
-    input, select { width: 100%; padding: 12px; margin: 8px 0; box-sizing: border-box;
-                    background: #16213e; border: 1px solid #0f3460; color: #eee; border-radius: 4px; }
-    input:focus, select:focus { border-color: #00d4ff; outline: none; }
+    input { width: 100%; padding: 12px; margin: 8px 0; box-sizing: border-box;
+            background: #16213e; border: 1px solid #0f3460; color: #eee; border-radius: 4px; }
+    input:focus { border-color: #00d4ff; outline: none; }
     button { width: 100%; padding: 14px; margin-top: 20px; background: #00d4ff; color: #1a1a2e;
              border: none; border-radius: 4px; font-size: 1.1em; cursor: pointer; font-weight: bold; }
     button:hover { background: #00b8e6; }
     label { color: #aaa; font-size: 0.9em; }
-    .note { color: #666; font-size: 0.8em; margin-top: 5px; }
-    .host-field { display: none; }
-    .host-field.show { display: block; }
+    .note { color: #888; font-size: 0.85em; margin-top: 15px; padding: 10px;
+            background: #16213e; border-radius: 4px; border-left: 3px solid #00d4ff; }
+    .auto-badge { display: inline-block; background: #00d4ff; color: #1a1a2e;
+                  padding: 2px 8px; border-radius: 10px; font-size: 0.7em;
+                  margin-left: 5px; vertical-align: middle; }
   </style>
 </head>
 <body>
@@ -37,30 +40,17 @@ static const char CONFIG_PAGE[] PROGMEM = R"rawliteral(
       <label>WiFi Password</label>
       <input type="password" name="pass" maxlength="64" placeholder="Enter WiFi password">
 
-      <h2>TCP Bridge Settings</h2>
-      <label>Mode</label>
-      <select name="mode" id="mode" onchange="toggleHost()">
-        <option value="0">Server (listen for connections)</option>
-        <option value="1">Client (connect to remote)</option>
-      </select>
-      <label>TCP Port</label>
-      <input type="number" name="port" value="5555" min="1" max="65535">
-      <div id="hostField" class="host-field">
-        <label>Remote Host (for client mode)</label>
-        <input type="text" name="host" maxlength="39" placeholder="192.168.1.100">
+      <h2>Peer Discovery <span class="auto-badge">AUTO</span></h2>
+      <div class="note">
+        <strong>No manual configuration needed!</strong><br><br>
+        This repeater will automatically discover and connect to other
+        MeshCore repeaters on the same WiFi network.<br><br>
+        Just configure WiFi on both repeaters - they'll find each other.
       </div>
-      <p class="note">Server mode: other repeaters connect to this one.<br>
-         Client mode: this repeater connects to a remote server.</p>
-      <button type="submit">Save &amp; Reboot</button>
+
+      <button type="submit">Save &amp; Connect</button>
     </form>
   </div>
-  <script>
-    function toggleHost() {
-      var mode = document.getElementById('mode').value;
-      var hostField = document.getElementById('hostField');
-      hostField.className = mode === '1' ? 'host-field show' : 'host-field';
-    }
-  </script>
 </body>
 </html>
 )rawliteral";
@@ -76,12 +66,22 @@ static const char SUCCESS_PAGE[] PROGMEM = R"rawliteral(
     .container { max-width: 400px; margin: 50px auto; }
     h1 { color: #00ff88; }
     p { color: #aaa; }
+    .info { background: #16213e; padding: 15px; border-radius: 4px; margin-top: 20px; text-align: left; }
+    .info li { margin: 8px 0; }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>Configuration Saved!</h1>
     <p>The device will now reboot and connect to your WiFi network.</p>
+    <div class="info">
+      <strong>What happens next:</strong>
+      <ul>
+        <li>Device connects to WiFi</li>
+        <li>Broadcasts discovery to find peers</li>
+        <li>Automatically pairs with available repeater</li>
+      </ul>
+    </div>
     <p>You can close this page.</p>
   </div>
 </body>
@@ -213,7 +213,8 @@ void TCPWifiPortal::sendRedirect(WiFiClient& client) {
 }
 
 bool TCPWifiPortal::parseFormData(const String& body) {
-  // Parse URL-encoded form data: ssid=xxx&pass=xxx&mode=0&port=5555&host=xxx
+  // Parse URL-encoded form data: ssid=xxx&pass=xxx
+  // Simplified: no more mode/port/host fields - all automatic
 
   // Extract SSID
   int ssidStart = body.indexOf("ssid=");
@@ -234,50 +235,14 @@ bool TCPWifiPortal::parseFormData(const String& body) {
     pass = urlDecode(body.substring(passStart, passEnd));
   }
 
-  // Extract mode
-  uint8_t mode = 0;
-  int modeStart = body.indexOf("mode=");
-  if (modeStart >= 0) {
-    modeStart += 5;
-    mode = body.substring(modeStart, modeStart + 1).toInt();
-  }
-
-  // Extract port
-  uint16_t port = 5555;
-  int portStart = body.indexOf("port=");
-  if (portStart >= 0) {
-    portStart += 5;
-    int portEnd = body.indexOf('&', portStart);
-    if (portEnd < 0) portEnd = body.length();
-    port = body.substring(portStart, portEnd).toInt();
-    if (port == 0) port = 5555;
-  }
-
-  // Extract host
-  String host = "";
-  int hostStart = body.indexOf("host=");
-  if (hostStart >= 0) {
-    hostStart += 5;
-    int hostEnd = body.indexOf('&', hostStart);
-    if (hostEnd < 0) hostEnd = body.length();
-    host = urlDecode(body.substring(hostStart, hostEnd));
-  }
-
-  // Save to config
+  // Save to config (only WiFi credentials)
   strncpy(_config->wifi_ssid, ssid.c_str(), sizeof(_config->wifi_ssid) - 1);
   _config->wifi_ssid[sizeof(_config->wifi_ssid) - 1] = '\0';
 
   strncpy(_config->wifi_pass, pass.c_str(), sizeof(_config->wifi_pass) - 1);
   _config->wifi_pass[sizeof(_config->wifi_pass) - 1] = '\0';
 
-  _config->mode = mode;
-  _config->port = port;
-
-  strncpy(_config->host, host.c_str(), sizeof(_config->host) - 1);
-  _config->host[sizeof(_config->host) - 1] = '\0';
-
-  Serial.printf("[TCPPortal] Config received: SSID=%s, mode=%d, port=%d, host=%s\n", _config->wifi_ssid,
-                _config->mode, _config->port, _config->host);
+  Serial.printf("[TCPPortal] Config received: SSID=%s (auto-discovery enabled)\n", _config->wifi_ssid);
 
   return true;
 }

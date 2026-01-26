@@ -1,10 +1,30 @@
 #ifdef WITH_TCP_WIFI_BRIDGE
 
 #include "TCPWifiBridge.h"
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
+#include <AsyncElegantOTA.h>
 
 #ifndef BRIDGE_DEBUG_PRINTLN
 #define BRIDGE_DEBUG_PRINTLN(fmt, ...) Serial.printf("[TCPBridge] " fmt, ##__VA_ARGS__)
 #endif
+
+// OTA web server (static so it persists)
+static AsyncWebServer* _ota_server = nullptr;
+
+bool TCPWifiBridge::isRunning() const {
+  // Check both initialized AND actually connected to peer
+  return _initialized && const_cast<WiFiClient&>(_client).connected();
+}
+
+const char* TCPWifiBridge::getStatusString() const {
+  if (!_initialized) return "Off";
+  if (_in_portal_mode) return "Portal Mode";
+  if (!_wifi_connected) return "WiFi Disconn";
+  if (const_cast<WiFiClient&>(_client).connected()) return "Connected";
+  if (_peer_discovered) return "Connecting...";
+  return "Searching...";
+}
 
 TCPWifiBridge::TCPWifiBridge(NodePrefs* prefs, mesh::PacketManager* mgr, mesh::RTCClock* rtc)
     : BridgeBase(prefs, mgr, rtc),
@@ -12,8 +32,11 @@ TCPWifiBridge::TCPWifiBridge(NodePrefs* prefs, mesh::PacketManager* mgr, mesh::R
       _in_portal_mode(false),
       _server(nullptr),
       _rx_buffer_pos(0),
-      _last_reconnect(0),
-      _wifi_connected(false) {
+      _wifi_connected(false),
+      _peer_discovered(false),
+      _is_server(false),
+      _last_discovery(0),
+      _last_connect_attempt(0) {
   initDefaultConfig();
 }
 
@@ -23,9 +46,8 @@ TCPWifiBridge::~TCPWifiBridge() {
 
 void TCPWifiBridge::initDefaultConfig() {
   memset(&_config, 0, sizeof(_config));
-  _config.mode = 0;  // Server mode
-  _config.port = DEFAULT_PORT;
-  _config.reconnect_ms = DEFAULT_RECONNECT_MS;
+  _config.tcp_port = DEFAULT_TCP_PORT;
+  _config.udp_port = DEFAULT_UDP_PORT;
   _config.guard = CONFIG_GUARD;
 }
 
@@ -40,13 +62,13 @@ bool TCPWifiBridge::loadConfig() {
   f.close();
 
   if (bytesRead != sizeof(_config) || _config.guard != CONFIG_GUARD) {
-    BRIDGE_DEBUG_PRINTLN("Invalid config, using defaults\n");
+    BRIDGE_DEBUG_PRINTLN("Invalid config (guard mismatch), using defaults\n");
     initDefaultConfig();
     return false;
   }
 
-  BRIDGE_DEBUG_PRINTLN("Config loaded: mode=%d, port=%d, ssid=%s\n", _config.mode, _config.port,
-                       _config.wifi_ssid);
+  BRIDGE_DEBUG_PRINTLN("Config loaded: ssid=%s, tcp_port=%d, udp_port=%d\n",
+                       _config.wifi_ssid, _config.tcp_port, _config.udp_port);
   return true;
 }
 
@@ -66,7 +88,7 @@ void TCPWifiBridge::saveConfig() {
 void TCPWifiBridge::begin() {
   if (_initialized) return;
 
-  BRIDGE_DEBUG_PRINTLN("Initializing...\n");
+  BRIDGE_DEBUG_PRINTLN("Initializing with auto-discovery...\n");
 
   // Load configuration
   loadConfig();
@@ -87,13 +109,11 @@ void TCPWifiBridge::begin() {
     return;
   }
 
-  // Start server or prepare client
-  if (_config.mode == 0) {
-    startServer();
-  }
+  // Start discovery process
+  startDiscovery();
 
   _initialized = true;
-  BRIDGE_DEBUG_PRINTLN("Initialized in %s mode\n", _config.mode == 0 ? "server" : "client");
+  BRIDGE_DEBUG_PRINTLN("Initialized, discovering peers...\n");
 }
 
 void TCPWifiBridge::end() {
@@ -112,8 +132,10 @@ void TCPWifiBridge::end() {
     _server = nullptr;
   }
 
+  _udp.stop();
   WiFi.disconnect(true);
   _wifi_connected = false;
+  _peer_discovered = false;
   _initialized = false;
   _rx_buffer_pos = 0;
 
@@ -137,8 +159,149 @@ bool TCPWifiBridge::connectWifi() {
 
   _wifi_connected = true;
   BRIDGE_DEBUG_PRINTLN("WiFi connected, IP: %s\n", WiFi.localIP().toString().c_str());
+
+  // Start OTA server on port 80
+  if (!_ota_server) {
+    _ota_server = new AsyncWebServer(80);
+    _ota_server->on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+      request->send(200, "text/html", "<h2>MeshCore TCP Bridge</h2><p><a href='/update'>Firmware Update</a></p>");
+    });
+    AsyncElegantOTA.begin(_ota_server);
+    _ota_server->begin();
+    BRIDGE_DEBUG_PRINTLN("OTA available at http://%s/update\n", WiFi.localIP().toString().c_str());
+  }
+
   return true;
 }
+
+// ============================================================================
+// Auto-Discovery
+// ============================================================================
+
+void TCPWifiBridge::startDiscovery() {
+  // Start UDP listener for discovery
+  _udp.begin(_config.udp_port);
+  BRIDGE_DEBUG_PRINTLN("Discovery started on UDP port %d\n", _config.udp_port);
+
+  // Reset discovery state
+  _peer_discovered = false;
+  _peer_ip = IPAddress(0, 0, 0, 0);
+  _last_discovery = 0;
+
+  // Always start TCP server - we may become the server role
+  startServer();
+}
+
+IPAddress TCPWifiBridge::getBroadcastAddress() {
+  IPAddress ip = WiFi.localIP();
+  IPAddress subnet = WiFi.subnetMask();
+  IPAddress broadcast;
+  for (int i = 0; i < 4; i++) {
+    broadcast[i] = ip[i] | ~subnet[i];
+  }
+  return broadcast;
+}
+
+void TCPWifiBridge::sendDiscoveryBroadcast() {
+  IPAddress broadcast = getBroadcastAddress();
+
+  _udp.beginPacket(broadcast, _config.udp_port);
+  _udp.print(DISCOVER_MSG);
+  _udp.endPacket();
+
+  BRIDGE_DEBUG_PRINTLN("Discovery broadcast sent to %s:%d\n",
+                       broadcast.toString().c_str(), _config.udp_port);
+}
+
+void TCPWifiBridge::getMacString(char* buf) {
+  uint8_t mac[6];
+  WiFi.macAddress(mac);
+  snprintf(buf, 13, "%02X%02X%02X%02X%02X%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
+void TCPWifiBridge::sendDiscoveryReply(IPAddress& sender) {
+  // Use MAC address as unique identifier
+  char macStr[13];
+  getMacString(macStr);
+
+  _udp.beginPacket(sender, _config.udp_port);
+  _udp.print(REPLY_PREFIX);
+  _udp.print(macStr);
+  _udp.endPacket();
+
+  BRIDGE_DEBUG_PRINTLN("Discovery reply sent to %s (MAC: %s)\n", sender.toString().c_str(), macStr);
+}
+
+void TCPWifiBridge::handleDiscoveryPacket() {
+  int packetSize = _udp.parsePacket();
+  if (packetSize == 0) return;
+
+  char buffer[64];
+  int len = _udp.read(buffer, sizeof(buffer) - 1);
+  if (len <= 0) return;
+  buffer[len] = '\0';
+
+  IPAddress senderIP = _udp.remoteIP();
+
+  // Ignore packets from ourselves
+  if (senderIP == WiFi.localIP()) return;
+
+  BRIDGE_DEBUG_PRINTLN("Discovery packet from %s: %s\n", senderIP.toString().c_str(), buffer);
+
+  // Handle discovery request
+  if (strcmp(buffer, DISCOVER_MSG) == 0) {
+    // Only reply if we're NOT paired
+    if (!isPaired()) {
+      sendDiscoveryReply(senderIP);
+    } else {
+      BRIDGE_DEBUG_PRINTLN("Ignoring discovery (already paired)\n");
+    }
+    return;
+  }
+
+  // Handle discovery reply
+  if (strncmp(buffer, REPLY_PREFIX, strlen(REPLY_PREFIX)) == 0) {
+    // Only process if we're not already paired
+    if (isPaired()) {
+      BRIDGE_DEBUG_PRINTLN("Ignoring reply (already paired)\n");
+      return;
+    }
+
+    // We found a peer!
+    _peer_ip = senderIP;
+    _peer_discovered = true;
+
+    // Determine role based on IP comparison
+    // Lower IP = server (waits for connection)
+    // Higher IP = client (initiates connection)
+    uint32_t myIP = (uint32_t)WiFi.localIP();
+    uint32_t peerIP = (uint32_t)senderIP;
+    _is_server = (myIP < peerIP);
+
+    BRIDGE_DEBUG_PRINTLN("Peer discovered: %s, I am %s (my IP: %s)\n",
+                         senderIP.toString().c_str(),
+                         _is_server ? "SERVER" : "CLIENT",
+                         WiFi.localIP().toString().c_str());
+  }
+}
+
+void TCPWifiBridge::loopDiscovery() {
+  // Always check for incoming discovery packets
+  handleDiscoveryPacket();
+
+  // If not paired, periodically send discovery broadcasts
+  if (!isPaired() && !_peer_discovered) {
+    unsigned long now = millis();
+    if (now - _last_discovery >= DISCOVERY_INTERVAL_MS) {
+      _last_discovery = now;
+      sendDiscoveryBroadcast();
+    }
+  }
+}
+
+// ============================================================================
+// Connection Management
+// ============================================================================
 
 void TCPWifiBridge::startServer() {
   if (_server) {
@@ -146,25 +309,27 @@ void TCPWifiBridge::startServer() {
     delete _server;
   }
 
-  _server = new WiFiServer(_config.port);
+  _server = new WiFiServer(_config.tcp_port);
   _server->begin();
-  BRIDGE_DEBUG_PRINTLN("Server listening on port %d\n", _config.port);
+  BRIDGE_DEBUG_PRINTLN("TCP server listening on port %d\n", _config.tcp_port);
 }
 
 void TCPWifiBridge::tryConnect() {
   if (_client.connected()) return;
+  if (!_peer_discovered) return;
+  if (_is_server) return;  // Server doesn't initiate connections
 
   unsigned long now = millis();
-  if (now - _last_reconnect < _config.reconnect_ms) return;
-  _last_reconnect = now;
+  if (now - _last_connect_attempt < CONNECT_RETRY_MS) return;
+  _last_connect_attempt = now;
 
-  BRIDGE_DEBUG_PRINTLN("Connecting to %s:%d\n", _config.host, _config.port);
+  BRIDGE_DEBUG_PRINTLN("Connecting to peer %s:%d\n", _peer_ip.toString().c_str(), _config.tcp_port);
 
-  if (_client.connect(_config.host, _config.port)) {
-    BRIDGE_DEBUG_PRINTLN("Connected to server\n");
+  if (_client.connect(_peer_ip, _config.tcp_port)) {
+    BRIDGE_DEBUG_PRINTLN("Connected to peer!\n");
     _rx_buffer_pos = 0;
   } else {
-    BRIDGE_DEBUG_PRINTLN("Connection failed\n");
+    BRIDGE_DEBUG_PRINTLN("Connection failed, will retry...\n");
   }
 }
 
@@ -188,49 +353,44 @@ void TCPWifiBridge::loop() {
     if (_wifi_connected) {
       BRIDGE_DEBUG_PRINTLN("WiFi disconnected\n");
       _wifi_connected = false;
+      _peer_discovered = false;
       if (_client.connected()) {
         _client.stop();
-      }
-    }
-    // Try to reconnect WiFi
-    unsigned long now = millis();
-    if (now - _last_reconnect > _config.reconnect_ms) {
-      _last_reconnect = now;
-      if (WiFi.reconnect()) {
-        unsigned long startTime = millis();
-        while (WiFi.status() != WL_CONNECTED && millis() - startTime < 5000) {
-          delay(100);
-        }
-        if (WiFi.status() == WL_CONNECTED) {
-          _wifi_connected = true;
-          BRIDGE_DEBUG_PRINTLN("WiFi reconnected\n");
-        }
       }
     }
     return;
   }
   _wifi_connected = true;
 
-  // Server mode - accept incoming connections
-  if (_config.mode == 0 && _server) {
-    if (!_client.connected()) {
-      WiFiClient newClient = _server->available();
-      if (newClient) {
-        _client = newClient;
-        _rx_buffer_pos = 0;
-        BRIDGE_DEBUG_PRINTLN("Client connected from %s\n", _client.remoteIP().toString().c_str());
-      }
+  // Run discovery process
+  loopDiscovery();
+
+  // Server: accept incoming connections
+  if (_server && !_client.connected()) {
+    WiFiClient newClient = _server->available();
+    if (newClient) {
+      _client = newClient;
+      _rx_buffer_pos = 0;
+      _peer_ip = _client.remoteIP();
+      _peer_discovered = true;
+      _is_server = true;
+      BRIDGE_DEBUG_PRINTLN("Client connected from %s\n", _client.remoteIP().toString().c_str());
     }
   }
 
-  // Client mode - maintain connection
-  if (_config.mode == 1) {
+  // Client: initiate connection to discovered peer
+  if (_peer_discovered && !_is_server) {
     tryConnect();
   }
 
-  // Process incoming data
+  // Process incoming TCP data
   if (_client.connected()) {
     processIncomingData();
+  } else if (_peer_discovered) {
+    // Connection lost, reset discovery to find peer again
+    BRIDGE_DEBUG_PRINTLN("Connection lost, restarting discovery\n");
+    _peer_discovered = false;
+    _last_discovery = 0;  // Trigger immediate discovery
   }
 }
 
@@ -336,24 +496,8 @@ bool TCPWifiBridge::handleCommand(const char* cmd, char* reply) {
   // Skip leading spaces
   while (*cmd == ' ') cmd++;
 
-  if (strncmp(cmd, "mode ", 5) == 0) {
-    cmdMode(cmd + 5, reply);
-    return true;
-  }
-  if (strncmp(cmd, "port ", 5) == 0) {
-    cmdPort(cmd + 5, reply);
-    return true;
-  }
-  if (strncmp(cmd, "host ", 5) == 0) {
-    cmdHost(cmd + 5, reply);
-    return true;
-  }
   if (strcmp(cmd, "status") == 0) {
     cmdStatus(reply);
-    return true;
-  }
-  if (strcmp(cmd, "save") == 0) {
-    cmdSave(reply);
     return true;
   }
   if (strcmp(cmd, "wifi reset") == 0) {
@@ -364,58 +508,17 @@ bool TCPWifiBridge::handleCommand(const char* cmd, char* reply) {
   // Unknown command - show help
   sprintf(reply,
           "TCP bridge commands:\n"
-          "  tcp mode 0|1    - Set mode (0=server, 1=client)\n"
-          "  tcp port <num>  - Set TCP port (default 5555)\n"
-          "  tcp host <ip>   - Set remote host (client mode)\n"
           "  tcp status      - Show connection status\n"
-          "  tcp save        - Save configuration\n"
           "  tcp wifi reset  - Clear WiFi config, restart portal\n");
   return true;
-}
-
-void TCPWifiBridge::cmdMode(const char* arg, char* reply) {
-  int mode = atoi(arg);
-  if (mode < 0 || mode > 1) {
-    sprintf(reply, "Invalid mode. Use 0 (server) or 1 (client)");
-    return;
-  }
-  _config.mode = mode;
-  sprintf(reply, "Mode set to %s. Use 'tcp save' to persist.", mode == 0 ? "server" : "client");
-}
-
-void TCPWifiBridge::cmdPort(const char* arg, char* reply) {
-  int port = atoi(arg);
-  if (port < 1 || port > 65535) {
-    sprintf(reply, "Invalid port. Use 1-65535");
-    return;
-  }
-  _config.port = port;
-  sprintf(reply, "Port set to %d. Use 'tcp save' to persist.", port);
-}
-
-void TCPWifiBridge::cmdHost(const char* arg, char* reply) {
-  // Skip leading spaces
-  while (*arg == ' ') arg++;
-
-  if (strlen(arg) == 0 || strlen(arg) >= sizeof(_config.host)) {
-    sprintf(reply, "Invalid host. Max %d characters.", (int)(sizeof(_config.host) - 1));
-    return;
-  }
-  strncpy(_config.host, arg, sizeof(_config.host) - 1);
-  _config.host[sizeof(_config.host) - 1] = '\0';
-  sprintf(reply, "Host set to %s. Use 'tcp save' to persist.", _config.host);
 }
 
 void TCPWifiBridge::cmdStatus(char* reply) {
   char* p = reply;
 
-  p += sprintf(p, "TCP Bridge Status:\n");
-  p += sprintf(p, "  Mode: %s\n", _config.mode == 0 ? "server" : "client");
-  p += sprintf(p, "  Port: %d\n", _config.port);
-
-  if (_config.mode == 1) {
-    p += sprintf(p, "  Remote Host: %s\n", _config.host);
-  }
+  p += sprintf(p, "TCP Bridge Status (Auto-Discovery):\n");
+  p += sprintf(p, "  TCP Port: %d\n", _config.tcp_port);
+  p += sprintf(p, "  UDP Port: %d (discovery)\n", _config.udp_port);
 
   if (_in_portal_mode) {
     p += sprintf(p, "  State: Portal mode (AP: %s)\n", TCPWifiPortal::getAPSSID());
@@ -424,23 +527,18 @@ void TCPWifiBridge::cmdStatus(char* reply) {
     p += sprintf(p, "  SSID: %s\n", _config.wifi_ssid);
   } else {
     p += sprintf(p, "  WiFi: Connected to %s\n", _config.wifi_ssid);
-    p += sprintf(p, "  IP: %s\n", WiFi.localIP().toString().c_str());
+    p += sprintf(p, "  My IP: %s\n", WiFi.localIP().toString().c_str());
 
     if (_client.connected()) {
-      p += sprintf(p, "  TCP: Connected");
-      if (_config.mode == 0) {
-        p += sprintf(p, " (client: %s)", _client.remoteIP().toString().c_str());
-      }
-      p += sprintf(p, "\n");
+      p += sprintf(p, "  Peer: %s (CONNECTED)\n", _peer_ip.toString().c_str());
+      p += sprintf(p, "  Role: %s\n", _is_server ? "server" : "client");
+    } else if (_peer_discovered) {
+      p += sprintf(p, "  Peer: %s (discovered, connecting...)\n", _peer_ip.toString().c_str());
+      p += sprintf(p, "  Role: %s\n", _is_server ? "server" : "client");
     } else {
-      p += sprintf(p, "  TCP: Disconnected\n");
+      p += sprintf(p, "  Peer: Searching...\n");
     }
   }
-}
-
-void TCPWifiBridge::cmdSave(char* reply) {
-  saveConfig();
-  sprintf(reply, "Configuration saved. Restart bridge for changes to take effect.");
 }
 
 void TCPWifiBridge::cmdWifiReset(char* reply) {

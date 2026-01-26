@@ -30,6 +30,16 @@ public:
   bool isRunning() const override;
 
   /**
+   * @brief Gets a short status string for display (max 20 chars)
+   *
+   * Override in subclasses to provide more detailed status.
+   * Default returns "Running" or "Off" based on isRunning().
+   *
+   * @return Status string suitable for OLED display
+   */
+  virtual const char* getStatusString() const { return isRunning() ? "Running" : "Off"; }
+
+  /**
    * @brief Common magic number used by all bridge implementations for packet identification
    *
    * This magic number is placed at the beginning of bridge packets to identify

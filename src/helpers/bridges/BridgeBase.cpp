@@ -1,6 +1,7 @@
 #include "BridgeBase.h"
 
 #include <Arduino.h>
+#include "Packet.h"
 
 bool BridgeBase::isRunning() const {
   return _initialized;
@@ -40,6 +41,14 @@ void BridgeBase::handleReceivedPacket(mesh::Packet *packet) {
   }
 
   if (!_seen_packets.hasSeen(packet)) {
+    // Convert DIRECT packets to FLOOD so they get retransmitted by the peer
+    // Local advertisements from the remote peer use sendZeroHop() which sets ROUTE_TYPE_DIRECT
+    // Without this conversion, they won't be retransmitted by this node
+    if (packet->isRouteDirect()) {
+      BRIDGE_DEBUG_PRINTLN("Converting DIRECT packet to FLOOD for retransmission\n");
+      packet->header = (packet->header & ~PH_ROUTE_MASK) | ROUTE_TYPE_FLOOD;
+    }
+
     // bridge_delay provides a buffer to prevent immediate processing conflicts in the mesh network.
     _mgr->queueInbound(packet, millis() + _prefs->bridge_delay);
   } else {

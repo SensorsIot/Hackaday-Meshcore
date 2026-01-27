@@ -311,11 +311,18 @@ File MyMesh::openAppend(const char *fname) {
 }
 
 bool MyMesh::allowPacketForward(const mesh::Packet *packet) {
+  MESH_DEBUG_PRINTLN("allowPacketForward: disable_fwd=%d flood=%d path_len=%d flood_max=%d recv_pkt_region=%p wildcard_flags=0x%02X",
+                     _prefs.disable_fwd, packet->isRouteFlood(), packet->path_len, _prefs.flood_max,
+                     recv_pkt_region, region_map.getWildcard().flags);
   if (_prefs.disable_fwd) return false;
   if (packet->isRouteFlood() && packet->path_len >= _prefs.flood_max) return false;
   if (packet->isRouteFlood() && recv_pkt_region == NULL) {
-    MESH_DEBUG_PRINTLN("allowPacketForward: unknown transport code, or wildcard not allowed for FLOOD packet");
-    return false;
+    // For bridged packets, recv_pkt_region is not set - use wildcard if allowed
+    if (region_map.getWildcard().flags & REGION_DENY_FLOOD) {
+      MESH_DEBUG_PRINTLN("allowPacketForward: wildcard not allowed for FLOOD packet");
+      return false;
+    }
+    // Allow bridged packets to use wildcard region
   }
   return true;
 }

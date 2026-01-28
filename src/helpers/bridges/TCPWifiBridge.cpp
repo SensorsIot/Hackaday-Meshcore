@@ -5,10 +5,18 @@
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <AsyncElegantOTA.h>
+#include <stdarg.h>
 
-#ifndef BRIDGE_DEBUG_PRINTLN
-#define BRIDGE_DEBUG_PRINTLN(fmt, ...) Serial.printf("[TCPBridge] " fmt, ##__VA_ARGS__)
-#endif
+// Static log buffer
+char TCPWifiBridge::_log_buffer[TCPWifiBridge::LOG_BUFFER_SIZE];
+size_t TCPWifiBridge::_log_write_pos = 0;
+size_t TCPWifiBridge::_log_count = 0;
+
+// Custom debug macro that logs to both Serial and HTTP buffer
+#define BRIDGE_DEBUG_PRINTLN(fmt, ...) do { \
+  Serial.printf("[TCPBridge] " fmt, ##__VA_ARGS__); \
+  TCPWifiBridge::addLog(fmt, ##__VA_ARGS__); \
+} while(0)
 
 // OTA web server (static so it persists)
 static AsyncWebServer* _ota_server = nullptr;
@@ -166,7 +174,11 @@ bool TCPWifiBridge::connectWifi() {
   if (!_ota_server) {
     _ota_server = new AsyncWebServer(80);
     _ota_server->on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-      request->send(200, "text/html", "<h2>MeshCore TCP Bridge</h2><p><a href='/update'>Firmware Update</a></p>");
+      request->send(200, "text/html", "<h2>MeshCore TCP Bridge</h2><p><a href='/update'>Firmware Update</a></p><p><a href='/logs'>View Logs</a></p>");
+    });
+    _ota_server->on("/logs", HTTP_GET, [](AsyncWebServerRequest *request) {
+      String logs = TCPWifiBridge::getLogs();
+      request->send(200, "text/plain", logs);
     });
     AsyncElegantOTA.begin(_ota_server);
     _ota_server->begin();
@@ -211,8 +223,9 @@ void TCPWifiBridge::sendDiscoveryBroadcast() {
   _udp.print(DISCOVER_MSG);
   _udp.endPacket();
 
-  BRIDGE_DEBUG_PRINTLN("Discovery broadcast sent to %s:%d\n",
-                       broadcast.toString().c_str(), _config.udp_port);
+  // Don't log every broadcast - fills buffer too fast
+  // BRIDGE_DEBUG_PRINTLN("Discovery broadcast sent to %s:%d\n",
+  //                      broadcast.toString().c_str(), _config.udp_port);
 }
 
 void TCPWifiBridge::getMacString(char* buf) {
@@ -231,7 +244,8 @@ void TCPWifiBridge::sendDiscoveryReply(IPAddress& sender) {
   _udp.print(macStr);
   _udp.endPacket();
 
-  BRIDGE_DEBUG_PRINTLN("Discovery reply sent to %s (MAC: %s)\n", sender.toString().c_str(), macStr);
+  // Don't log every reply - too noisy
+  // BRIDGE_DEBUG_PRINTLN("Discovery reply sent to %s (MAC: %s)\n", sender.toString().c_str(), macStr);
 }
 
 void TCPWifiBridge::handleDiscoveryPacket() {
@@ -248,7 +262,8 @@ void TCPWifiBridge::handleDiscoveryPacket() {
   // Ignore packets from ourselves
   if (senderIP == WiFi.localIP()) return;
 
-  BRIDGE_DEBUG_PRINTLN("Discovery packet from %s: %s\n", senderIP.toString().c_str(), buffer);
+  // Don't log every discovery packet - too noisy
+  // BRIDGE_DEBUG_PRINTLN("Discovery packet from %s: %s\n", senderIP.toString().c_str(), buffer);
 
   // Handle discovery request
   if (strcmp(buffer, DISCOVER_MSG) == 0) {
@@ -455,39 +470,48 @@ void TCPWifiBridge::processIncomingData() {
 }
 
 void TCPWifiBridge::sendPacket(mesh::Packet* packet) {
-  if (!_initialized) return;
+  if (!_initialized) {
+    BRIDGE_DEBUG_PRINTLN("sendPacket: not initialized\n");
+    return;
+  }
   if (!packet) return;
-  if (!_client.connected()) return;
+  if (!_client.connected()) {
+    // Don't log - too noisy during discovery
+    return;
+  }
 
   // Check if packet already seen (prevent retransmission)
-  if (!_seen_packets.hasSeen(packet)) {
-    uint8_t buffer[MAX_TCP_PACKET_SIZE];
-
-    // Write mesh packet starting at offset 4 (after header fields)
-    uint16_t len = packet->writeTo(buffer + 4);
-
-    // Validate payload size
-    if (len > (MAX_TRANS_UNIT + 1)) {
-      BRIDGE_DEBUG_PRINTLN("TX packet too large (payload=%d, max=%d)\n", len, MAX_TRANS_UNIT + 1);
-      return;
-    }
-
-    // Build packet header
-    buffer[0] = (BRIDGE_PACKET_MAGIC >> 8) & 0xFF;  // Magic high byte: 0xC0
-    buffer[1] = BRIDGE_PACKET_MAGIC & 0xFF;         // Magic low byte: 0x3E
-    buffer[2] = (len >> 8) & 0xFF;                  // Length high byte
-    buffer[3] = len & 0xFF;                         // Length low byte
-
-    // Calculate Fletcher-16 checksum over payload
-    uint16_t checksum = fletcher16(buffer + 4, len);
-    buffer[4 + len] = (checksum >> 8) & 0xFF;  // Checksum high byte
-    buffer[5 + len] = checksum & 0xFF;         // Checksum low byte
-
-    // Transmit complete framed packet
-    _client.write(buffer, len + TCP_OVERHEAD);
-
-    logPacket("TX->", packet, len, checksum);
+  if (_seen_packets.hasSeen(packet)) {
+    // Don't log dups - too noisy
+    return;
   }
+
+  uint8_t buffer[MAX_TCP_PACKET_SIZE];
+
+  // Write mesh packet starting at offset 4 (after header fields)
+  uint16_t len = packet->writeTo(buffer + 4);
+
+  // Validate payload size
+  if (len > (MAX_TRANS_UNIT + 1)) {
+    BRIDGE_DEBUG_PRINTLN("TX packet too large (payload=%d, max=%d)\n", len, MAX_TRANS_UNIT + 1);
+    return;
+  }
+
+  // Build packet header
+  buffer[0] = (BRIDGE_PACKET_MAGIC >> 8) & 0xFF;  // Magic high byte: 0xC0
+  buffer[1] = BRIDGE_PACKET_MAGIC & 0xFF;         // Magic low byte: 0x3E
+  buffer[2] = (len >> 8) & 0xFF;                  // Length high byte
+  buffer[3] = len & 0xFF;                         // Length low byte
+
+  // Calculate Fletcher-16 checksum over payload
+  uint16_t checksum = fletcher16(buffer + 4, len);
+  buffer[4 + len] = (checksum >> 8) & 0xFF;  // Checksum high byte
+  buffer[5 + len] = checksum & 0xFF;         // Checksum low byte
+
+  // Transmit complete framed packet
+  _client.write(buffer, len + TCP_OVERHEAD);
+
+  logPacket("TX->", packet, len, checksum);
 }
 
 // ============================================================================
@@ -540,12 +564,17 @@ bool TCPWifiBridge::handleCommand(const char* cmd, char* reply) {
     cmdWifiReset(reply);
     return true;
   }
+  if (strncmp(cmd, "wifi set ", 9) == 0) {
+    cmdWifiSet(cmd + 9, reply);
+    return true;
+  }
 
   // Unknown command - show help
   sprintf(reply,
           "TCP bridge commands:\n"
-          "  tcp status      - Show connection status\n"
-          "  tcp wifi reset  - Clear WiFi config, restart portal\n");
+          "  tcp status              - Show connection status\n"
+          "  tcp wifi reset          - Clear WiFi config, restart portal\n"
+          "  tcp wifi set SSID PASS  - Set WiFi credentials and restart\n");
   return true;
 }
 
@@ -587,6 +616,103 @@ void TCPWifiBridge::cmdWifiReset(char* reply) {
   // Schedule restart
   delay(500);
   ESP.restart();
+}
+
+void TCPWifiBridge::cmdWifiSet(const char* args, char* reply) {
+  // Parse "SSID PASSWORD" from args
+  char ssid[33] = {0};
+  char pass[65] = {0};
+
+  // Find space between SSID and password
+  const char* space = strchr(args, ' ');
+  if (!space) {
+    sprintf(reply, "Usage: tcp wifi set <SSID> <PASSWORD>");
+    return;
+  }
+
+  // Copy SSID (up to space)
+  size_t ssid_len = space - args;
+  if (ssid_len >= sizeof(ssid)) ssid_len = sizeof(ssid) - 1;
+  strncpy(ssid, args, ssid_len);
+
+  // Copy password (after space)
+  const char* pass_start = space + 1;
+  strncpy(pass, pass_start, sizeof(pass) - 1);
+
+  // Trim trailing whitespace from password
+  size_t pass_len = strlen(pass);
+  while (pass_len > 0 && (pass[pass_len-1] == ' ' || pass[pass_len-1] == '\n' || pass[pass_len-1] == '\r')) {
+    pass[--pass_len] = '\0';
+  }
+
+  if (strlen(ssid) == 0 || strlen(pass) == 0) {
+    sprintf(reply, "Usage: tcp wifi set <SSID> <PASSWORD>");
+    return;
+  }
+
+  // Set credentials
+  strncpy(_config.wifi_ssid, ssid, sizeof(_config.wifi_ssid) - 1);
+  strncpy(_config.wifi_pass, pass, sizeof(_config.wifi_pass) - 1);
+  saveConfig();
+
+  sprintf(reply, "WiFi credentials set: SSID=%s. Restarting...", ssid);
+
+  // Schedule restart
+  delay(500);
+  ESP.restart();
+}
+
+// ============================================================================
+// HTTP Log Buffer
+// ============================================================================
+
+void TCPWifiBridge::addLog(const char* fmt, ...) {
+  char line[256];
+
+  // Add millisecond timestamp prefix
+  unsigned long ms = millis();
+  int prefix_len = snprintf(line, sizeof(line), "[%lu] ", ms);
+
+  va_list args;
+  va_start(args, fmt);
+  int len = prefix_len + vsnprintf(line + prefix_len, sizeof(line) - prefix_len, fmt, args);
+  va_end(args);
+
+  if (len <= prefix_len) return;
+  if (len >= (int)sizeof(line)) len = sizeof(line) - 1;
+
+  // Write to circular buffer
+  for (int i = 0; i < len; i++) {
+    _log_buffer[_log_write_pos] = line[i];
+    _log_write_pos = (_log_write_pos + 1) % LOG_BUFFER_SIZE;
+  }
+  _log_count += len;
+}
+
+String TCPWifiBridge::getLogs() {
+  if (_log_count == 0) {
+    return String("No logs yet\n");
+  }
+
+  // Calculate actual data size
+  size_t data_size = (_log_count < LOG_BUFFER_SIZE) ? _log_write_pos : LOG_BUFFER_SIZE;
+
+  // Pre-allocate string to avoid repeated reallocations
+  String result;
+  if (!result.reserve(data_size + 1)) {
+    return String("Error: out of memory\n");
+  }
+
+  if (_log_count < LOG_BUFFER_SIZE) {
+    // Buffer hasn't wrapped - copy directly
+    result = String(_log_buffer, _log_write_pos);
+  } else {
+    // Buffer wrapped - read from write_pos to end, then start to write_pos
+    result = String(_log_buffer + _log_write_pos, LOG_BUFFER_SIZE - _log_write_pos);
+    result += String(_log_buffer, _log_write_pos);
+  }
+
+  return result;
 }
 
 #endif  // WITH_TCP_WIFI_BRIDGE

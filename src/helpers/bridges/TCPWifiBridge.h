@@ -143,9 +143,21 @@ private:
   // CLI command handlers
   void cmdStatus(char* reply);
   void cmdWifiReset(char* reply);
+  void cmdWifiSet(const char* args, char* reply);
 
   // Logging helper
   void logPacket(const char* direction, mesh::Packet* packet, uint16_t len, uint16_t crc);
+
+public:
+  // HTTP log buffer - public for external logging
+  static constexpr size_t LOG_BUFFER_SIZE = 32768;  // 32KB circular buffer for longer retention
+  static void addLog(const char* fmt, ...);
+  static String getLogs();
+
+private:
+  static char _log_buffer[LOG_BUFFER_SIZE];
+  static size_t _log_write_pos;
+  static size_t _log_count;
 };
 
 #endif  // WITH_TCP_WIFI_BRIDGE

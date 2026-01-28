@@ -346,6 +346,24 @@ void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
 }
 
 void MyMesh::logRx(mesh::Packet *pkt, int len, float score) {
+#ifdef WITH_TCP_WIFI_BRIDGE
+  // Log LoRa RX to HTTP endpoint
+  uint8_t type = pkt->getPayloadType();
+  const char* route = pkt->isRouteDirect() ? "D" : "F";
+  int snr = (int)_radio->getLastSNR();
+  int rssi = (int)_radio->getLastRSSI();
+
+  if (type == PAYLOAD_TYPE_TXT_MSG || type == PAYLOAD_TYPE_GRP_TXT ||
+      type == PAYLOAD_TYPE_REQ || type == PAYLOAD_TYPE_RESPONSE || type == PAYLOAD_TYPE_PATH) {
+    // Show src/dest for routable packets
+    uint8_t dest = pkt->payload_len >= 1 ? pkt->payload[0] : 0;
+    uint8_t src = pkt->payload_len >= 2 ? pkt->payload[1] : 0;
+    TCPWifiBridge::addLog("LoRa-RX type=%d %s [%02X->%02X] snr=%d rssi=%d\n", type, route, src, dest, snr, rssi);
+  } else {
+    TCPWifiBridge::addLog("LoRa-RX type=%d %s len=%d snr=%d rssi=%d\n", type, route, len, snr, rssi);
+  }
+#endif
+
 #ifdef WITH_BRIDGE
   if (_prefs.bridge_pkt_src == 1) {
     bridge.sendPacket(pkt);
@@ -372,6 +390,22 @@ void MyMesh::logRx(mesh::Packet *pkt, int len, float score) {
 }
 
 void MyMesh::logTx(mesh::Packet *pkt, int len) {
+#ifdef WITH_TCP_WIFI_BRIDGE
+  // Log LoRa TX to HTTP endpoint
+  uint8_t type = pkt->getPayloadType();
+  const char* route = pkt->isRouteDirect() ? "D" : "F";
+
+  if (type == PAYLOAD_TYPE_TXT_MSG || type == PAYLOAD_TYPE_GRP_TXT ||
+      type == PAYLOAD_TYPE_REQ || type == PAYLOAD_TYPE_RESPONSE || type == PAYLOAD_TYPE_PATH) {
+    // Show src/dest for routable packets
+    uint8_t dest = pkt->payload_len >= 1 ? pkt->payload[0] : 0;
+    uint8_t src = pkt->payload_len >= 2 ? pkt->payload[1] : 0;
+    TCPWifiBridge::addLog("LoRa-TX type=%d %s [%02X->%02X] len=%d\n", type, route, src, dest, len);
+  } else {
+    TCPWifiBridge::addLog("LoRa-TX type=%d %s len=%d\n", type, route, len);
+  }
+#endif
+
 #ifdef WITH_BRIDGE
   if (_prefs.bridge_pkt_src == 0) {
     bridge.sendPacket(pkt);
@@ -397,6 +431,11 @@ void MyMesh::logTx(mesh::Packet *pkt, int len) {
 }
 
 void MyMesh::logTxFail(mesh::Packet *pkt, int len) {
+#ifdef WITH_TCP_WIFI_BRIDGE
+  TCPWifiBridge::addLog("LoRa-TX-FAIL type=%d %s len=%d\n", pkt->getPayloadType(),
+                        pkt->isRouteDirect() ? "D" : "F", len);
+#endif
+
   if (_logging) {
     File f = openAppend(PACKET_LOG_FILE);
     if (f) {

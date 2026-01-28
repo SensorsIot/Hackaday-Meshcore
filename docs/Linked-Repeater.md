@@ -310,12 +310,51 @@ For permanent installations, configure static DHCP leases in your router using t
 
 This ensures devices always get the same IP after reboot.
 
+## LoRa Regional Configuration
+
+The LoRa radio parameters must match the rest of your MeshCore network. Settings are configured in `platformio.ini`.
+
+### Switzerland / Europe (Default MeshCore Settings)
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| **Frequency** | 869.618 MHz | EU868 band |
+| **Bandwidth** | 62.5 kHz | Standard for EU/UK |
+| **Spreading Factor** | 8 | Standard for EU/UK |
+| **Coding Rate** | 8 | Standard for EU/UK |
+
+```ini
+# platformio.ini
+build_flags =
+  -D LORA_FREQ=869.618
+  -D LORA_BW=62.5
+  -D LORA_SF=8
+  -D LORA_CR=8
+```
+
+### Verifying Settings Match
+
+**Critical**: All devices in a mesh network must use identical LoRa parameters. Mismatched settings will prevent devices from communicating - they will transmit but not receive each other's packets.
+
+Common symptoms of mismatched settings:
+- Device transmits (LoRa-TX visible in logs) but never receives (no LoRa-RX)
+- Bridge works (TCP packets flow) but no LoRa traffic from mesh
+- Advertisements sent but no responses
+
+### Other Regions
+
+| Region | Frequency | BW | SF | CR |
+|--------|-----------|-----|-----|-----|
+| US/Canada | 915.0 MHz | 250 kHz | 10-11 | 5 |
+| Australia | 915.0 MHz | 250 kHz | 10-11 | 5 |
+| EU/UK/CH | 869.618 MHz | 62.5 kHz | 8 | 8 |
+
 ## Test Hardware
 
-| Device | MAC Address | IP (DHCP) | Role |
-|--------|-------------|-----------|------|
-| LilyGo T-LoRa V2.1-1.6 #1 | 90:15:06:CE:10:F4 | 192.168.0.89 | TCP Bridge |
-| LilyGo T-LoRa V2.1-1.6 #2 | 10:06:1C:16:D6:38 | 192.168.0.90 | TCP Bridge |
+| Device | Node Name | MAC Address | IP (DHCP) | Role |
+|--------|-----------|-------------|-----------|------|
+| LilyGo T-LoRa V2.1-1.6 #1 | Birch | 90:15:06:CE:10:F4 | 192.168.0.89 | TCP Bridge |
+| LilyGo T-LoRa V2.1-1.6 #2 | Lausen | 10:06:1C:16:D6:38 | 192.168.0.90 | TCP Bridge |
 
 ## Time Synchronization
 

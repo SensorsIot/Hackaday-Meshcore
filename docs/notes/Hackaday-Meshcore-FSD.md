@@ -41,12 +41,16 @@ Fork **`examples/companion_radio/`** (not `simple_secure_chat`). Reasons:
 - `DataStore` over SPIFFS solves persistence with zero work.
 - `NodePrefs` (22 fields) is the editable settings schema.
 
-### 4. Display Driver — Native NV3007
-- **Class:** `NV3007Display : public DisplayDriver` in `variants/hackaday_communicator/`.
-- **Approach:** direct ESP32-S3 SPI (HSPI), no Arduino_GFX or LVGL.
-- **Rendering model:** 1-bit monochrome DRAM framebuffer (~7.6 KB), flushed in `endFrame()` as 16-bit big-endian RGB565 with two-color mapping (`DARK`→`TFT_BLACK`, anything else→`TFT_MESH`).
-- **Init sequence:** byte sequence from the NV3007 init operations (hardware facts; not copied source); equivalent to what Meshtastic's `Arduino_NV3007` does.
-- **DisplayDriver compliance:** implement all required virtual methods (`startFrame`, `endFrame`, `setCursor`, `print`, `fillRect`, `drawRect`, `drawXbm`, `getTextWidth`, etc.) so future MeshCore UI primitives could in theory render against this driver.
+### 4. Display Driver — Arduino_GFX backend behind a MeshCore wrapper
+- **Class:** `NV3007Display : public DisplayDriver` in `variants/hackaday_communicator/`. Same MeshCore-shaped API as originally planned.
+- **Approach:** Arduino_GFX (MIT) underneath — `Arduino_ESP32SPI` on HSPI + `Arduino_NV3007` for the panel driver + a custom `BadgeCanvas` (subclasses `Arduino_GFX` directly) for the 1-bit framebuffer.
+  - Original plan was a from-scratch SPI driver with our own glyph rendering. That got iters 1 and 2 working (init + solid fill, framebuffer flush) but stalled on text — font format, MADCTL rotation, and partial-redraw windows are generic display-library work, not badge-specific. Switched to Arduino_GFX rather than re-implement.
+  - Wrapper isolates the dependency: `examples/companion_radio/` and the future `BadgeUITask` see only `DisplayDriver`, never Arduino_GFX. Swap-out cost stays low.
+- **Rendering model:** 1-bit monochrome RAM framebuffer (7704 bytes, 428×142 → stored row-byte-aligned in panel-native 142×428 orientation). On `endFrame()` BadgeCanvas walks the framebuffer one panel-native row at a time, expands bits into 16-bit BE RGB565 (`TFT_MESH` 0x6752 or `TFT_BLACK` 0x0000), and pushes via `draw16bitBeRGBBitmap` — the same path Meshtastic uses on this hardware. Per-pixel `drawBitmap` was tried first and rendered unreliably on the NV3007; row-batched push fixed it.
+- **Init sequence:** `NV3007_279_init_operations` from Arduino_GFX (hardware fact for the panel revision shipped on the badge).
+- **Orientation:** panel is mounted rotated 180° from the chip's native orientation. `BadgeCanvas::writePixelPreclipped` applies the flip — user `(x, y)` → panel-native `(cx=y, cy=NV3007_PANEL_H-1-x)`. The panel chip's MADCTL stays at default (rotation=0 in the constructor), with offsets `(12, 0, 14, 0)`. Determined empirically on hardware.
+- **Color macro collision:** Arduino_GFX defines `RED`/`GREEN`/`BLUE` as preprocessor macros that collide with `DisplayDriver::Color::RED` etc. Workaround: never include `<Arduino_GFX_Library.h>` in `NV3007Display.h` — only in the .cpp, and after `NV3007Display.h` so MeshCore's enum is parsed first.
+- **DisplayDriver compliance:** all required virtual methods forward to Arduino_GFX primitives (`fillScreen`, `fillRect`, `drawRect`, `setCursor`, `print`, `getTextBounds`, `drawXBitmap`).
 
 ### 5. Keyboard Driver — TCA8418
 - **Class:** `TCA8418Keyboard` in `variants/hackaday_communicator/` (variant-private; can be promoted to `src/helpers/ui/` later if reused).
@@ -222,9 +226,9 @@ build_flags = ${esp32s3_base.build_flags}
 ## Milestones
 
 ### M1 — Bring-up (highest risk; do this first)
-- [ ] Variant `platformio.ini` compiles against `esp32s3_base`.
-- [ ] `HackadayBoard.cpp/h` — extends `ESP32Board`, `begin()` initializes GPIOs, returns manufacturer name.
-- [ ] `NV3007Display.cpp/h` — direct-SPI driver implementing `DisplayDriver`; 1-bit framebuffer; renders "Hello, Hackaday-Meshcore" at boot.
+- [x] Variant `platformio.ini` compiles against `esp32_base` (note: no `esp32s3_base` exists upstream — all ESP32-S3 variants extend `esp32_base` with `board = esp32-s3-devkitc-1`). Custom `boards/hackaday_communicator.json` defines N16R8 (16 MB DIO flash + 8 MB OPI PSRAM) — the badge's actual module.
+- [x] `HackadayBoard.cpp/h` — extends `ESP32Board`, `begin()` initializes GPIOs and calls `nv3007_smoke_test()`, returns manufacturer name.
+- [x] `NV3007Display.cpp/h` — `DisplayDriver` wrapper over Arduino_GFX (see §4); 1-bit framebuffer; renders "Hello, Hackaday-Meshcore" at boot.
 - [ ] `TCA8418Keyboard.cpp/h` — I2C bring-up, interrupt on KB_INT, event queue functional; key echoes to display.
 - [ ] LoRa SX1262 TX + RX smoke test (hardcoded freq, payload), verified by a second SX1262 device or LoRa spectrum analyzer.
 - [ ] M1 deliverable: a `.bin` you can flash and physically demonstrate all three subsystems working.

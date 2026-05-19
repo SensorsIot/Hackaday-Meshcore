@@ -1,8 +1,14 @@
 #pragma once
 
 #include <Arduino.h>
-#include <SPI.h>
 #include <helpers/ui/DisplayDriver.h>
+
+// Forward declarations only — Arduino_GFX headers define RED/GREEN/BLUE
+// as preprocessor macros that collide with MeshCore's Color enum, so
+// they must not be included in this public header.
+class Arduino_DataBus;
+class Arduino_GFX;
+class BadgeCanvas;
 
 #ifndef NV3007_WIDTH
   #define NV3007_WIDTH  428
@@ -11,11 +17,10 @@
   #define NV3007_HEIGHT 142
 #endif
 
-// 1-bit framebuffer for the 428×142 user-facing canvas. Stored in
-// panel-native row-major order (142 cols × 428 rows), 8 bits packed
-// per byte, MSB-first within a byte. Total = 142*428/8 = 7597 bytes.
-#define NV3007_FB_BYTES 7597
-
+// MeshCore DisplayDriver implementation backed by Arduino_GFX
+// (Arduino_NV3007 panel + Arduino_Canvas_Mono framebuffer). The
+// wrapper keeps upstream MeshCore code on a stable abstraction; the
+// rendering library can be swapped without touching badge code.
 class NV3007Display : public DisplayDriver {
 public:
   NV3007Display() : DisplayDriver(NV3007_WIDTH, NV3007_HEIGHT) {}
@@ -27,21 +32,20 @@ public:
   void turnOff() override;
   void clear() override;
   void startFrame(Color bkg = DARK) override;
-  void setTextSize(int sz) override { _text_size = sz; }
-  void setColor(Color c) override { _color = c; }
-  void setCursor(int x, int y) override { _cursor_x = x; _cursor_y = y; }
-  void print(const char* str) override {}
+  void setTextSize(int sz) override;
+  void setColor(Color c) override;
+  void setCursor(int x, int y) override;
+  void print(const char* str) override;
   void fillRect(int x, int y, int w, int h) override;
   void drawRect(int x, int y, int w, int h) override;
-  void drawXbm(int x, int y, const uint8_t* bits, int w, int h) override {}
-  uint16_t getTextWidth(const char* str) override { return 0; }
+  void drawXbm(int x, int y, const uint8_t* bits, int w, int h) override;
+  uint16_t getTextWidth(const char* str) override;
   void endFrame() override;
 
 private:
   bool _on = false;
-  int _cursor_x = 0, _cursor_y = 0;
-  int _text_size = 1;
   Color _color = LIGHT;
-
-  uint8_t _fb[NV3007_FB_BYTES];
+  Arduino_DataBus* _bus    = nullptr;
+  Arduino_GFX*     _panel  = nullptr;
+  BadgeCanvas*     _canvas = nullptr;
 };

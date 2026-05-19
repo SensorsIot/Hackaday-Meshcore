@@ -162,34 +162,99 @@ bool NV3007Display::begin() {
   runInitSequence();
   delay(50);
 
-  // Iter 1: paint the whole panel solid TFT_MESH green so we can verify
-  // SPI + init reached the panel. Framebuffer comes in iter 2.
-  setWindow(0, 0, NV3007_PANEL_W, NV3007_PANEL_H);
-  uint8_t row[NV3007_PANEL_W * 2];
-  for (int i = 0; i < NV3007_PANEL_W; i++) {
-    row[i * 2]     = TFT_MESH_HI;
-    row[i * 2 + 1] = TFT_MESH_LO;
-  }
-  for (int y = 0; y < NV3007_PANEL_H; y++) {
-    tft_spi.writeBytes(row, sizeof(row));
-  }
-
   digitalWrite(PIN_TFT_CS, HIGH);
   tft_spi.endTransaction();
 
-  // Backlight on — we want photons.
+  // Backlight on — we want photons. Panel contents are undefined until
+  // the first endFrame() flushes the framebuffer.
   digitalWrite(PIN_TFT_BL, HIGH);
 
+  memset(_fb, 0, sizeof(_fb));
   _on = true;
   return true;
 }
 
-// Iter 1 hook — runs the same bring-up without going through the full
-// MeshCore DisplayDriver pipeline. Called from HackadayBoard::begin() so we
-// can verify the panel without pulling in the companion_radio UI stack.
+void NV3007Display::clear() {
+  memset(_fb, 0, sizeof(_fb));
+}
+
+void NV3007Display::startFrame(Color bkg) {
+  memset(_fb, (bkg == DARK) ? 0x00 : 0xFF, sizeof(_fb));
+}
+
+// Map a user-facing (x, y) — where user width is 428 (horizontal) and
+// height is 142 (vertical) — to a bit in the panel-native framebuffer
+// laid out as 142 cols × 428 rows. The panel is mounted rotated 90°
+// relative to the user view, so user_x corresponds to panel_row.
+static inline void fb_set(uint8_t* fb, int x, int y, bool on) {
+  if ((unsigned)x >= NV3007_WIDTH || (unsigned)y >= NV3007_HEIGHT) return;
+  int panel_col = y;                // 0..141
+  int panel_row = NV3007_WIDTH - 1 - x;  // 0..427
+  int bit_index = panel_row * NV3007_PANEL_W + panel_col;
+  int byte_index = bit_index >> 3;
+  uint8_t mask = 0x80 >> (bit_index & 7);
+  if (on) fb[byte_index] |= mask;
+  else    fb[byte_index] &= ~mask;
+}
+
+void NV3007Display::fillRect(int x, int y, int w, int h) {
+  bool on = (_color != DARK);
+  for (int j = 0; j < h; j++) {
+    for (int i = 0; i < w; i++) {
+      fb_set(_fb, x + i, y + j, on);
+    }
+  }
+}
+
+void NV3007Display::drawRect(int x, int y, int w, int h) {
+  bool on = (_color != DARK);
+  for (int i = 0; i < w; i++) {
+    fb_set(_fb, x + i, y,         on);
+    fb_set(_fb, x + i, y + h - 1, on);
+  }
+  for (int j = 0; j < h; j++) {
+    fb_set(_fb, x,         y + j, on);
+    fb_set(_fb, x + w - 1, y + j, on);
+  }
+}
+
+void NV3007Display::endFrame() {
+  tft_spi.beginTransaction(SPISettings(NV3007_SPI_HZ, MSBFIRST, SPI_MODE0));
+  digitalWrite(PIN_TFT_CS, LOW);
+  setWindow(0, 0, NV3007_PANEL_W, NV3007_PANEL_H);
+  digitalWrite(PIN_TFT_DC, HIGH);
+
+  // Walk the framebuffer in panel order (row by row), expand each bit
+  // into the 16-bit BE RGB565 pair on the wire.
+  uint8_t line[NV3007_PANEL_W * 2];
+  const uint8_t* src = _fb;
+  for (int row = 0; row < NV3007_PANEL_H; row++) {
+    uint8_t bits = 0;
+    int bit_pos = 0;
+    for (int col = 0; col < NV3007_PANEL_W; col++) {
+      if (bit_pos == 0) { bits = *src++; bit_pos = 8; }
+      bool on = (bits & 0x80) != 0;
+      bits <<= 1;
+      bit_pos--;
+      if (on) { line[col*2] = TFT_MESH_HI; line[col*2+1] = TFT_MESH_LO; }
+      else    { line[col*2] = 0x00;        line[col*2+1] = 0x00;        }
+    }
+    tft_spi.writeBytes(line, sizeof(line));
+  }
+
+  digitalWrite(PIN_TFT_CS, HIGH);
+  tft_spi.endTransaction();
+}
+
+// Iter 2 hook — instantiates the driver, runs startFrame(LIGHT) +
+// endFrame() once so we can confirm the framebuffer pipeline produces
+// the same solid green as iter 1.
 void nv3007_smoke_test() {
   static NV3007Display d;
-  d.begin();
+  if (!d.begin()) return;
+  d.setColor(DisplayDriver::LIGHT);
+  d.startFrame(DisplayDriver::LIGHT);
+  d.endFrame();
 }
 
 void NV3007Display::turnOn() {

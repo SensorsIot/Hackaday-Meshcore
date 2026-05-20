@@ -54,7 +54,7 @@ Fork **`examples/companion_radio/`** (not `simple_secure_chat`). Reasons:
 
 ### 5. Keyboard Driver — TCA8418
 - **Class:** `TCA8418Keyboard` in `variants/hackaday_communicator/` (variant-private; can be promoted to `src/helpers/ui/` later if reused).
-- **Wiring:** I2C on SDA GPIO47, SCL GPIO14, address `0x34`, interrupt on GPIO13 (`KB_INT`).
+- **Wiring:** I2C controller 1 (Arduino-ESP32 `Wire1`, NOT `Wire`) on SDA GPIO47, SCL GPIO14, address `0x34`, interrupt on GPIO13 (`KB_INT`), reset on GPIO48 (`KB_RST`, active-low). Controller 0 fails to talk to the chip on this hardware (every address NACKs); controller 1 works. The reset line is pulsed low→high (120 µs each side) at init.
 - **Mode:** **interrupt-driven**. ISR sets a flag only; main loop drains the TCA8418 event FIFO over I2C when the flag is set. No I2C transactions inside the ISR.
 - **API to UI:** `bool getNextKey(KeyEvent& out)` event-queue pattern, drained from `BadgeUITask::loop()`.
 - **`KeyEvent` type:**
@@ -70,7 +70,7 @@ Fork **`examples/companion_radio/`** (not `simple_secure_chat`). Reasons:
     bool pressed;  // true=press, false=release
   };
   ```
-- **Keymap:** re-implemented clean-room from documented physical layout. Two shift keys (positions 30 and 76), 1500 ms modifier timeout.
+- **Keymap:** clean-room transcription of the reference firmware's layout, indexed by `key_num = row*10 + col + 1`. Hold-to-shift; `getNextKey()` emits CHAR/FUNCTION/NAV on press only. Full tables in [Appendix A](#appendix-a--keyboard-matrix).
 
 ### 6. UI Architecture — Flat Screens + Router
 - **Base class:**
@@ -86,7 +86,27 @@ Fork **`examples/companion_radio/`** (not `simple_secure_chat`). Reasons:
   ```
 - **Router:** `BadgeUITask` owns five `Screen*` (chat/nodes/channels/settings/status). F1–F5 swap `_current`. ESC pops a screen-internal modal or returns to chat.
 - **Internal modals:** settings screen runs its edit-value flow as a `_mode` enum inside `SettingsScreen` rather than a global nav stack.
-- **On-screen F-key labels strip:** the bottom 13 px shows five labels above each physical F-key, so each screen advertises its key-shortcut surface contextually.
+- **On-screen F-key labels strip:** the bottom ~10 px shows five labels above each physical F-key; the current screen's label is shown inverted (filled cell, dark text).
+
+**Screen layout (428 × 142, vertical regions).** Layout constants live in `examples/badge_chat/UILayout.h`:
+
+| y | Region | Font | Notes |
+|---|---|---|---|
+| 1–9 | Status bar | size 1 (6×8) | separator at y=10 |
+| 13–108 | Chat history | size 2 (12×16) | ~6 lines |
+| 109 | Compose separator | — | |
+| 113–128 | Compose / input line (chat) | size 2 (12×16) | |
+| 130 | F-key separator | — | |
+| 133–140 | F-key labels strip | size 1 (6×8) | |
+
+- **Status bar:** time · channel name · node count · RSSI. RSSI is a `--dBm` placeholder — per-packet RSSI is not exposed through `AbstractUITask` (M3). No battery indicator (see §9) and no BLE indicator in v1.
+- **Redraw:** full-frame on any change — the NV3007 driver flushes the whole 1-bit buffer; there is no partial update.
+- **`BadgeUITask::loop()`** drains `getNextKey()`, dispatches each `KeyEvent` to `_current->handleKey()`, and repaints when state changed.
+
+**ChatScreen (single default channel):**
+- Messages left-aligned, word-wrapped to width, prefixed with sender name; the local node's own messages use the `me:` prefix. Newest message pinned to the bottom of the history region.
+- History held in a RAM ring buffer (40 messages). ↑/↓ scroll history.
+- Compose is a persistent bottom line. Printable keys append; Backspace deletes; ←/→ move the cursor; Enter sends on the default channel and clears the line. Text wider than the line scrolls horizontally to keep the cursor visible. Length is capped at the MeshCore channel-payload maximum.
 
 ### 7. F-Key Assignments
 - F1 → Chat
@@ -98,9 +118,9 @@ Fork **`examples/companion_radio/`** (not `simple_secure_chat`). Reasons:
 Each screen may override F-key meanings while a modal is active (labels strip updates to reflect modal context).
 
 ### 8. Fonts
-- **Bundled:** `ArialMT_Plain_10` (13 px line height) + `ArialMT_Plain_16` (19 px) from MeshCore's `OLEDDisplayFonts.cpp` (MIT, ThingPulse).
-- **Usage:** Arial 10 for status bar, F-key labels strip, dense info. Arial 16 for message body, settings rows, compose line.
-- **Decision rationale:** Meshtastic uses Arial 16+24 on this badge because they navigate with arrow keys (no labels strip). We need the smaller font for the labels strip. Revisit on hardware if 10pt isn't readable.
+- **Source:** Arduino_GFX's built-in 5×7 font, scaled by `setTextSize()`. The NV3007 path renders through Arduino_GFX, not MeshCore's OLED driver, so the ThingPulse Arial GFXfonts are not used.
+- **Sizes:** size 1 = 6×8 px (≈71 chars/line) for the status bar and F-key strip; size 2 = 12×16 px (≈35 chars/line) for the chat history and compose line.
+- **Future:** custom GFXfonts can be loaded into `NV3007Display` if the built-in font proves too plain; revisit on hardware.
 
 ### 9. Power Model — Light Sleep on Idle
 - Display backlight off after ~30 s idle.
@@ -171,6 +191,7 @@ Reference. Authoritative source is the notes doc.
 | SDA | 47 |
 | SCL | 14 |
 | INT (active-low) | 13 |
+| RST (active-low) | 48 |
 | I2C address | 0x34 |
 | Matrix | 8 rows × 10 cols |
 
@@ -211,7 +232,7 @@ build_flags = ${esp32s3_base.build_flags}
   -D PIN_TFT_BL=2 -D PIN_TFT_DC=39 -D PIN_TFT_CS=41 -D PIN_TFT_RST=40
   -D PIN_TFT_SCK=38 -D PIN_TFT_MOSI=21
   ; Keyboard
-  -D PIN_I2C_SDA=47 -D PIN_I2C_SCL=14 -D PIN_KB_INT=13
+  -D PIN_I2C_SDA=47 -D PIN_I2C_SCL=14 -D PIN_KB_INT=13 -D PIN_KB_RST=48
   -D TCA8418_KB_ADDR=0x34
   ; LoRa
   -D USE_SX1262
@@ -227,24 +248,26 @@ build_flags = ${esp32s3_base.build_flags}
 
 ### M1 — Bring-up (highest risk; do this first)
 - [x] Variant `platformio.ini` compiles against `esp32_base` (note: no `esp32s3_base` exists upstream — all ESP32-S3 variants extend `esp32_base` with `board = esp32-s3-devkitc-1`). Custom `boards/hackaday_communicator.json` defines N16R8 (16 MB DIO flash + 8 MB OPI PSRAM) — the badge's actual module.
-- [x] `HackadayBoard.cpp/h` — extends `ESP32Board`, `begin()` initializes GPIOs and calls `nv3007_smoke_test()`, returns manufacturer name.
+- [x] `HackadayBoard.cpp/h` — extends `ESP32Board`; `begin()` chains `ESP32Board::begin()` then brings up the TCA8418 keyboard (no MeshCore example knows about it).
 - [x] `NV3007Display.cpp/h` — `DisplayDriver` wrapper over Arduino_GFX (see §4); 1-bit framebuffer; renders "Hello, Hackaday-Meshcore" at boot.
-- [ ] `TCA8418Keyboard.cpp/h` — I2C bring-up, interrupt on KB_INT, event queue functional; key echoes to display.
-- [ ] LoRa SX1262 TX + RX smoke test (hardcoded freq, payload), verified by a second SX1262 device or LoRa spectrum analyzer.
-- [ ] M1 deliverable: a `.bin` you can flash and physically demonstrate all three subsystems working.
+- [x] `TCA8418Keyboard.cpp/h` — I2C bring-up on Wire1 (not Wire — controller 0 wedges on this hardware), interrupt on KB_INT, raw event queue functional; key echoes to display.
+- [x] Keymap layer — `getNextKey()` translates raw `key_num` into CHAR/FUNCTION/NAV via the clean-room `KEY_MATRIX`/`SHIFT_MATRIX` (see §5), with hold-to-shift modifier tracking.
+- [x] LoRa SX1262 SPI bring-up — `radio.std_init()` returns true via the variant's `target.cpp::radio_init()`. End-to-end TX/RX over the air is verified implicitly in M2's two-badge chat test.
+- [x] M1 deliverable: a `.bin` you can flash and demonstrate display + keyboard + radio all initializing.
 
 ### M2 — Chat MVP
-- [ ] `BadgeUITask : public AbstractUITask` with `ChatScreen` only — others stubbed.
-- [ ] Status bar with: time, channel name, node count, RSSI.
-- [ ] Incoming-message display path: `newMsg(...)` → append to chat ring buffer → redraw.
-- [ ] Outgoing-message compose path: full QWERTY input, shift modifier, Enter to send.
-- [ ] Single default channel only.
-- [ ] BLE companion verified — phone app sees the badge.
-- [ ] M2 deliverable: two badges can chat with each other on default channel.
+- [x] `BadgeUITask : public AbstractUITask` + `Screen` base class and router (F1–F5 switch screen). `ChatScreen` is real; Nodes/Channels/Settings/Status are stub screens (title + "coming in M3"). Navigation verified on hardware. Lives in `examples/badge_chat/` (forked `main.cpp` + `BadgeUITask`; reuses companion_radio's `MyMesh`/`DataStore`/`NodePrefs`).
+- [x] Screen layout per §6: status bar (top), chat history, compose line, F-key labels strip (bottom).
+- [x] Status bar with: time, channel name, node count, RSSI (RSSI is a placeholder — see §6).
+- [x] Incoming-message display path: `newMsg(...)` → append to chat ring buffer → full-frame redraw.
+- [x] Outgoing-message compose path: persistent bottom line, printable keys append, Backspace deletes, ←/→ move cursor, Enter sends on channel 0 and clears. ↑/↓ scroll history. Verified on hardware.
+- [x] Single default channel only ("Public", channel index 0, seeded at first boot).
+- [x] BLE companion verified — iOS MeshCore app pairs (PIN 654321), fetches device info, and syncs contacts/channels. Standard MeshCore SC pairing, unmodified.
+- [x] M2 deliverable: verified over the air on the Public channel — a second node's message renders on the badge (`B: …`), and a message typed on the badge is received by the second node.
 
 ### M3 — Feature Parity
-- [ ] All 5 screens implemented: `ChatScreen`, `NodesScreen`, `ChannelsScreen`, `SettingsScreen`, `StatusScreen`.
-- [ ] On-screen F-key labels strip implemented (context-aware).
+- [ ] All 5 screens fully implemented: `NodesScreen`, `ChannelsScreen`, `SettingsScreen`, `StatusScreen` built out from their M2 stubs (`ChatScreen` already done in M2).
+- [ ] F-key labels strip becomes context-aware — labels update per screen and while a modal is active.
 - [ ] Settings screen — full edit surface for all `NodePrefs` (minus GPS/buzzer) + badge-specific (region, brightness, auto-off, firmware update).
 - [ ] Edit modals: text, number, enum, bool, action.
 - [ ] LoRa region selector wired through to runtime radio config.
@@ -327,6 +350,36 @@ These are the literal commands/actions to execute when starting M1. **Verify eac
    ```
 
 9. **Begin M1**: scaffold `variants/hackaday_communicator/` (empty `platformio.ini`, stubs for `HackadayBoard`, `NV3007Display`, `TCA8418Keyboard`, `target`). Make it compile against `esp32s3_base` before adding any logic.
+
+## Appendix A — Keyboard Matrix
+
+The TCA8418 reports `key_num = row*10 + col + 1` (range 1..80). These two 81-entry tables (index 0 unused) are indexed directly by `key_num`; `SHIFT_MATRIX` is used while a shift key is held, `KEY_MATRIX` otherwise. Transcribed clean-room from `firmware/badge/hardware/keyboard.py` in the [Hackaday badge hardware repo](https://github.com/Hack-a-Day/2025-Communicator_Badge), implemented in `variants/hackaday_communicator/TCA8418Keyboard.cpp`.
+
+Special keys: `F1`–`F5`, `ESC`, `TAB`, `ENTER`, `BS`, `DEL`, arrows (`←↑↓→`), and modifiers `SFT`/`CTL`/`ALT`/`JW` (Jolly Wrencher meta). Modifier positions: shift at 31 & 77, CTL at 41, ALT at 43 & 50, JW at 42, ESC at 11. CTL/ALT/JW are tracked but not yet surfaced to the UI; DEL maps to NAV BACKSPACE.
+
+| key_num | C0 | C1 | C2 | C3 | C4 | C5 | C6 | C7 | C8 | C9 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **R0** (1–10)  | — | F1 | `+` | `9` | `8` | `7` | F2 | F3 | F4 | F5 |
+| **R1** (11–20) | ESC | `q` | `w` | `e` | `r` | `t` | `y` | `u` | `i` | `o` |
+| **R2** (21–30) | TAB | `a` | `s` | `d` | `f` | `g` | `h` | `j` | `k` | `l` |
+| **R3** (31–40) | SFT | `z` | `x` | `c` | `v` | `b` | `n` | `m` | `,` | `.` |
+| **R4** (41–50) | CTL | JW | ALT | `\` | space | — | → | ↓ | ← | ALT |
+| **R5** (51–60) | — | — | `-` | `6` | `5` | `4` | `]` | `[` | `p` | — |
+| **R6** (61–70) | — | — | `*` | `3` | `2` | `1` | ENTER | `'` | `;` | — |
+| **R7** (71–80) | — | — | `/` | `=` | `.` | `0` | SFT | ↑ | BS | — |
+
+Shifted (`SHIFT_MATRIX`):
+
+| key_num | C0 | C1 | C2 | C3 | C4 | C5 | C6 | C7 | C8 | C9 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **R0** (1–10)  | — | F1 | `+` | `(` | `*` | `&` | F2 | F3 | F4 | F5 |
+| **R1** (11–20) | `` ` `` | `Q` | `W` | `E` | `R` | `T` | `Y` | `U` | `I` | `O` |
+| **R2** (21–30) | TAB | `A` | `S` | `D` | `F` | `G` | `H` | `J` | `K` | `L` |
+| **R3** (31–40) | SFT | `Z` | `X` | `C` | `V` | `B` | `N` | `M` | `<` | `>` |
+| **R4** (41–50) | CTL | JW | ALT | `\|` | space | — | → | ↓ | ← | ALT |
+| **R5** (51–60) | — | — | `_` | `^` | `%` | `$` | `}` | `{` | `P` | — |
+| **R6** (61–70) | — | — | `*` | `#` | `@` | `!` | ENTER | `"` | `:` | — |
+| **R7** (71–80) | — | — | `?` | `+` | `,` | `)` | SFT | ↑ | DEL | — |
 
 ## Related
 

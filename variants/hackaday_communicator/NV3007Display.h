@@ -45,6 +45,10 @@ public:
 private:
   bool _on = false;
   Color _color = LIGHT;
+  // When the proportional GFXfont is active (setTextSize(3)), Arduino_GFX
+  // positions text by its baseline. _baseline is added in setCursor so
+  // callers keep passing top-left y coordinates regardless of font mode.
+  int   _baseline = 0;
   Arduino_DataBus* _bus    = nullptr;
   Arduino_GFX*     _panel  = nullptr;
   BadgeCanvas*     _canvas = nullptr;

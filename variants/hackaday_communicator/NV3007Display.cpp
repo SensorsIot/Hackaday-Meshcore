@@ -4,6 +4,13 @@
 // Color enum is parsed before Arduino_GFX defines RED/GREEN/BLUE as
 // preprocessor macros.
 #include <Arduino_GFX_Library.h>
+// Proportional UI font (Adafruit GFXfont, MIT). Used for read-only
+// info/list screens via setTextSize(3); see setTextSize() below.
+#include "FreeSans9pt7b.h"
+
+// Baseline offset for FreeSans9pt7b: cap glyphs reach ~13 px above the
+// baseline, so adding this to the top-left y lands the text correctly.
+#define NV3007_PROP_BASELINE 13
 
 // NV3007 driver — MeshCore DisplayDriver wrapper over Arduino_GFX.
 //
@@ -146,10 +153,20 @@ void NV3007Display::startFrame(Color bkg) {
 }
 
 void NV3007Display::setTextSize(int sz) {
-  // Arduino_GFX's built-in font is 5×7; setTextSize(N) draws it at N×
-  // scale. 1 ≈ 5×7, 2 ≈ 10×14, 3 ≈ 15×21. Picks something readable on
-  // the badge's 428×142 canvas; can be refined with custom GFXfonts.
-  _canvas->setTextSize(sz);
+  // Text modes on the badge:
+  //   1, 2 -> Arduino_GFX's built-in 5×7 bitmap font at N× scale
+  //           (monospace; keeps the chat wrap math and the chrome text).
+  //   3+   -> FreeSans9pt7b proportional GFXfont (~22 px line height),
+  //           used by the read-only info/list screens for legibility.
+  if (sz >= 3) {
+    _canvas->setFont(&FreeSans9pt7b);
+    _canvas->setTextSize(1);
+    _baseline = NV3007_PROP_BASELINE;
+  } else {
+    _canvas->setFont(NULL);
+    _canvas->setTextSize(sz);
+    _baseline = 0;
+  }
 }
 
 void NV3007Display::setColor(Color c) {
@@ -158,7 +175,9 @@ void NV3007Display::setColor(Color c) {
 }
 
 void NV3007Display::setCursor(int x, int y) {
-  _canvas->setCursor(x, y);
+  // _baseline is 0 for the bitmap font and the GFXfont ascent otherwise,
+  // so callers always pass the top-left y of the text.
+  _canvas->setCursor(x, y + _baseline);
 }
 
 void NV3007Display::print(const char* str) {
@@ -186,20 +205,4 @@ uint16_t NV3007Display::getTextWidth(const char* str) {
 
 void NV3007Display::endFrame() {
   _canvas->flush();
-}
-
-// M1 bring-up hook — exercises the full pipeline (panel init,
-// framebuffer clear, text render, flush) so we can confirm visually
-// that the display works before plumbing through DISPLAY_CLASS.
-void nv3007_smoke_test() {
-  static NV3007Display d;
-  if (!d.begin()) return;
-  d.startFrame(DisplayDriver::DARK);
-  d.setColor(DisplayDriver::LIGHT);
-  d.setTextSize(2);
-  const char* msg = "Hello, Hackaday-Meshcore";
-  uint16_t w = d.getTextWidth(msg);
-  d.setCursor((NV3007_WIDTH - w) / 2, (NV3007_HEIGHT - 14) / 2);
-  d.print(msg);
-  d.endFrame();
 }

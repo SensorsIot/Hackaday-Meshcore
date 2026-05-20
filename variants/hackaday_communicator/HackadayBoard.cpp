@@ -1,15 +1,16 @@
 #include <Arduino.h>
 #include "HackadayBoard.h"
+#include "TCA8418Keyboard.h"
 
-void nv3007_smoke_test();
+extern TCA8418Keyboard keyboard;
 
 void HackadayBoard::begin() {
   ESP32Board::begin();
 
-  // M1 iter 1: bring up the NV3007 display and paint a solid TFT_MESH
-  // green so we can confirm SPI + panel init are working before wiring
-  // the framebuffer through DisplayDriver in iter 2.
-  Serial.println("[badge] NV3007 smoke test starting...");
-  nv3007_smoke_test();
-  Serial.println("[badge] NV3007 smoke test done.");
+  // Keyboard goes up here (not in app setup) because no MeshCore
+  // example knows about TCA8418. The chip is on I2C controller 1
+  // (Wire1) — see TCA8418Keyboard.cpp for the rationale.
+  if (!keyboard.begin()) {
+    Serial.println("[badge] WARNING: TCA8418 keyboard init failed");
+  }
 }

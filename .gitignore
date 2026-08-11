@@ -18,3 +18,7 @@ compile_commands.json
 venv/
 platformio.local.ini
 .claude-data/
+
+# Project skills come from the Embedded-AI-Harness bind mount
+# (/home/dev/.harness-skills). The link is host-specific -- do not commit it.
+.claude/skills/
